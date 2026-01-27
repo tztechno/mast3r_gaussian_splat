@@ -24,6 +24,8 @@ from pipeline.step06_gaussiansplat import train_gaussian_splatting
 cfg = {}
 cfg = setup_run(cfg)
 
+from pipeline.config import Config
+
 # ==========================
 
 
