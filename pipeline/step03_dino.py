@@ -1,5 +1,5 @@
 import os
-
+from pipeline.config import Config
 
 def load_torch_image(fname, device):
     """Load image as torch tensor"""
