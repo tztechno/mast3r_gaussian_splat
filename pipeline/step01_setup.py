@@ -192,9 +192,8 @@ def setup_mast3r():
 
 
 def run(cfg):
-    clear_memory() 
+    clear_memory()
     get_memory_info()
-    run_cmd(cmd, check=True, capture=False)
     setup_base_environment()
     setup_mast3r()
     return cfg
