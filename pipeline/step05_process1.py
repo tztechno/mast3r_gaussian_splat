@@ -1,6 +1,6 @@
 import os
-from pipeline.config import Config
-from pipeline.utils import clear_memory, get_memory_info
+from .utils import clear_memory, get_memory_info
+from .config import Config
 
 #v26
 def extract_colmap_data(scene, image_paths, max_points=1000000):
