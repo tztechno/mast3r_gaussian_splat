@@ -1,6 +1,7 @@
 # ============================================================================
 # Step 0: Biplet-Square Normalization (PRESERVED FROM ORIGINAL)
 # ============================================================================
+import os
 
 def normalize_image_sizes_biplet(input_dir, output_dir=None, size=1024):
     """
