@@ -3,6 +3,7 @@
 # Replaces: ALIKED/LightGlue/COLMAP with MASt3R
 
 from pipeline.config import Config
+from utils import clear_memory, get_memory_info
 
 import os
 import sys
