@@ -124,4 +124,3 @@ This stage meticulously bridges MASt3R’s native representation with the strict
 * **Biplet-Square Strategy:** Intentionally preserves peripheral data often lost in center crops, providing more context for matching when image overlap is minimal.
 * **Resource-Aware Design:** The pipeline is built on a philosophy of hardware survival. By downsampling at the inference level (224px), capping the data structure level (`max_points`), and managing the process level (`clear_memory`), the system remains robust against the constraints of real-world GPU VRAM.
 
-**Would you like me to generate a specific implementation script or a requirements file based on these specifications?**
