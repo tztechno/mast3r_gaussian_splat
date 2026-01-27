@@ -24,8 +24,8 @@ from pipeline.step06_gaussiansplat import train_gaussian_splatting
 cfg = {}
 cfg = setup_run(cfg)
 
-from pipeline.config import Config
-from pipeline.utils import clear_memory, get_memory_info
+from .utils import clear_memory, get_memory_info
+from .config import Config
 
 # ==========================
 
