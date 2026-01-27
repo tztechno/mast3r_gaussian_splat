@@ -3,7 +3,7 @@
 # ============================================================================
 import os
 from pipeline.config import Config
-from utils import clear_memory, get_memory_info
+from pipeline.utils import clear_memory, get_memory_info
 
 def normalize_image_sizes_biplet(input_dir, output_dir=None, size=1024):
     """
