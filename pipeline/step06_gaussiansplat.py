@@ -2,8 +2,8 @@
 # Step 3: Gaussian Splatting Training
 # ============================================================================
 import os
-from pipeline.config import Config
-from pipeline.utils import clear_memory, get_memory_info
+from .utils import clear_memory, get_memory_info
+from .config import Config
 
 def setup_gaussian_splatting():
     """Setup Gaussian Splatting"""
