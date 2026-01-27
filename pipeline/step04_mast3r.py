@@ -97,9 +97,7 @@ def run_mast3r_pairs(model, image_paths, pairs, device='cuda', batch_size=1, max
 
 
 def run(cfg):
-    
     load_mast3r_model(device='cuda')
     load_images_for_mast3r(image_paths, size=224)
     run_mast3r_pairs(model, image_paths, pairs, device='cuda', batch_size=1, max_pairs=None)
-    
     return cfg
