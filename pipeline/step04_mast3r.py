@@ -2,7 +2,7 @@
 # Step 2: MASt3R Reconstruction (REPLACES ALIKED/LIGHTGLUE/COLMAP)
 # ============================================================================
 import os
-
+from pipeline.config import Config
 
 def load_mast3r_model(device='cuda'):
     """Load MASt3R model"""
