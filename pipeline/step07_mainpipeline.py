@@ -1,6 +1,8 @@
 # ============================================================================
 # Main Pipeline
 # ============================================================================
+import os
+
 
 def main_pipeline(image_dir, output_dir, square_size=224, iterations=2000, 
                  max_images=None, max_pairs=10000, max_points=1000000):
