@@ -146,8 +146,53 @@ def setup_mast3r():
     print("✓ MASt3R setup complete!")
 
 
+def setup_gaussian_splatting():
+    """Setup Gaussian Splatting"""
+    print("\n=== Setting up Gaussian Splatting ===")
+    
+    os.chdir('/kaggle/working')
+    
+    WORK_DIR = "gaussian-splatting"
+    
+    if not os.path.exists(WORK_DIR):
+        print("Cloning Gaussian Splatting repository...")
+        run_cmd([
+            "git", "clone", "--recursive",
+            "https://github.com/graphdeco-inria/gaussian-splatting.git",
+            WORK_DIR
+        ])
+    else:
+        print("✓ Repository already exists")
+    
+    os.chdir(WORK_DIR)
+    
+    # Install requirements
+    print("Installing Gaussian Splatting requirements...")
+    run_cmd([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    
+    # Build submodules
+    print("\n📦 Building Gaussian Splatting submodules...")
+    
+    submodules = {
+        "diff-gaussian-rasterization":
+            "https://github.com/graphdeco-inria/diff-gaussian-rasterization.git",
+        "simple-knn":
+            "https://github.com/camenduru/simple-knn.git"
+    }
+    
+    for name, repo in submodules.items():
+        print(f"\n📦 Installing {name}...")
+        path = os.path.join("submodules", name)
+        if not os.path.exists(path):
+            run_cmd(["git", "clone", repo, path])
+        run_cmd([sys.executable, "-m", "pip", "install", path])
+    
+    print("✓ Gaussian Splatting setup complete!")
+
+
 
 def run(cfg):
     setup_base_environment()
     setup_mast3r()
+    setup_gaussian_splatting()
     return cfg
