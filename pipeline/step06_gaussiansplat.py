@@ -3,7 +3,7 @@
 # ============================================================================
 import os
 from pipeline.config import Config
-from utils import clear_memory, get_memory_info
+from pipeline.utils import clear_memory, get_memory_info
 
 def setup_gaussian_splatting():
     """Setup Gaussian Splatting"""
