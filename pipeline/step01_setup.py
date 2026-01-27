@@ -2,8 +2,8 @@
 # Preserves: DINO pair selection + Biplet-Square Normalization
 # Replaces: ALIKED/LightGlue/COLMAP with MASt3R
 
-from pipeline.config import Config
-from pipeline.utils import clear_memory, get_memory_info
+from .utils import clear_memory, get_memory_info
+from .config import Config
 
 import os
 import sys
