@@ -4,8 +4,9 @@
 
 # ===== standard =====
 
+import os
 import shutil
-import sys, os
+import sys
 sys.path.append(os.path.abspath(".")) 
 
 # ===== pipeline steps =====
