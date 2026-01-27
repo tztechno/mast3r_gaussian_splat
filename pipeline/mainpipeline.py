@@ -25,7 +25,7 @@ cfg = {}
 cfg = setup_run(cfg)
 
 from pipeline.config import Config
-from utils import clear_memory, get_memory_info
+from pipeline.utils import clear_memory, get_memory_info
 
 # ==========================
 
