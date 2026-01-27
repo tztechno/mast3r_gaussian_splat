@@ -43,13 +43,13 @@ def main_pipeline(image_dir, output_dir, square_size=224, iterations=2000,
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    setup_base_environment()
-    clear_memory()
+    #setup_base_environment()
+    #clear_memory()
     
-    setup_mast3r()
-    clear_memory()
+    #setup_mast3r()
+    #clear_memory()
     
-    setup_gaussian_splatting()
+    #setup_gaussian_splatting()
     clear_memory()
     
     # Step 1: Normalize images to biplet-square format
