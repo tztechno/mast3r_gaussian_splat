@@ -7,8 +7,6 @@ from .config import Config
 
 import os
 import sys
-import sys
-sys.path.append(os.path.abspath(".")) 
 
 import gc
 import h5py
@@ -23,49 +21,6 @@ import struct
 
 # Transformers for DINO
 from transformers import AutoImageProcessor, AutoModel
-
-def setup_gaussian_splatting():
-    """Setup Gaussian Splatting"""
-    print("\n=== Setting up Gaussian Splatting ===")
-    
-    os.chdir('/kaggle/working')
-    
-    WORK_DIR = "gaussian-splatting"
-    
-    if not os.path.exists(WORK_DIR):
-        print("Cloning Gaussian Splatting repository...")
-        run_cmd([
-            "git", "clone", "--recursive",
-            "https://github.com/graphdeco-inria/gaussian-splatting.git",
-            WORK_DIR
-        ])
-    else:
-        print("✓ Repository already exists")
-    
-    os.chdir(WORK_DIR)
-    
-    # Install requirements
-    print("Installing Gaussian Splatting requirements...")
-    run_cmd([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-    
-    # Build submodules
-    print("\n📦 Building Gaussian Splatting submodules...")
-    
-    submodules = {
-        "diff-gaussian-rasterization":
-            "https://github.com/graphdeco-inria/diff-gaussian-rasterization.git",
-        "simple-knn":
-            "https://github.com/camenduru/simple-knn.git"
-    }
-    
-    for name, repo in submodules.items():
-        print(f"\n📦 Installing {name}...")
-        path = os.path.join("submodules", name)
-        if not os.path.exists(path):
-            run_cmd(["git", "clone", repo, path])
-        run_cmd([sys.executable, "-m", "pip", "install", path])
-    
-    print("✓ Gaussian Splatting setup complete!")
 
 
 def train_gaussian_splatting(colmap_dir, image_dir, output_dir, iterations=2000):
@@ -119,7 +74,6 @@ def train_gaussian_splatting(colmap_dir, image_dir, output_dir, iterations=2000)
 
 
 def run(cfg):
-    setup_gaussian_splatting()
     train_gaussian_splatting(colmap_dir, image_dir, output_dir, iterations=2000)    
     return cfg
     
