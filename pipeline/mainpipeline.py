@@ -27,9 +27,21 @@ cfg = setup_run(cfg)
 from .utils import clear_memory, get_memory_info
 from .config import Config
 
+import gc
+import h5py
+import numpy as np
+import torch
+import torch.nn.functional as F
+from tqdm import tqdm
+from pathlib import Path
+import subprocess
+from PIL import Image, ImageFilter
+import struct
+
+# Transformers for DINO
+from transformers import AutoImageProcessor, AutoModel
+
 # ==========================
-
-
 
 
 def main_pipeline(image_dir, output_dir, square_size=224, iterations=2000, 
