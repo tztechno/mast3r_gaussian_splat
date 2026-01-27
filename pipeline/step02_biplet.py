@@ -94,4 +94,5 @@ def run(cfg):
         cfg.processed_image_dir,
         cfg.square_size
     )
+    generate_two_crops(img, size)
     return cfg
