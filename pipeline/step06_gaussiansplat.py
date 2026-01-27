@@ -2,7 +2,7 @@
 # Step 3: Gaussian Splatting Training
 # ============================================================================
 import os
-
+from pipeline.config import Config
 
 def setup_gaussian_splatting():
     """Setup Gaussian Splatting"""
