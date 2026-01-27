@@ -1,6 +1,8 @@
 import os
 from .utils import clear_memory, get_memory_info
 from .config import Config
+from transformers import AutoImageProcessor, AutoModel
+
 
 def load_torch_image(fname, device):
     """Load image as torch tensor"""
