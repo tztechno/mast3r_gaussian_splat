@@ -1,3 +1,5 @@
+import os
+
 
 def load_torch_image(fname, device):
     """Load image as torch tensor"""
