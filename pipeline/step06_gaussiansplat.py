@@ -1,6 +1,8 @@
 # ============================================================================
 # Step 3: Gaussian Splatting Training
 # ============================================================================
+import os
+
 
 def setup_gaussian_splatting():
     """Setup Gaussian Splatting"""
