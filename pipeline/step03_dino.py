@@ -90,10 +90,9 @@ def generate_two_crops(img, size):
     return crops
 
 
+
 def run(cfg):
-    
     normalize_image_sizes_biplet(input_dir, output_dir=None, size=1024)
     generate_two_crops(img, size)   
-    
     return cfg
     
