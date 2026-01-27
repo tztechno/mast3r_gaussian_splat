@@ -1,11 +1,15 @@
 # ============================================================================
 # Step 3: Gaussian Splatting Training
 # ============================================================================
+
 from .utils import clear_memory, get_memory_info
 from .config import Config
 
 import os
 import sys
+import sys
+sys.path.append(os.path.abspath(".")) 
+
 import gc
 import h5py
 import numpy as np
