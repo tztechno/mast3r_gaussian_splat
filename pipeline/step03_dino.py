@@ -1,6 +1,6 @@
 import os
-from pipeline.config import Config
-from pipeline.utils import clear_memory, get_memory_info
+from .utils import clear_memory, get_memory_info
+from .config import Config
 
 def load_torch_image(fname, device):
     """Load image as torch tensor"""
