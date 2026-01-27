@@ -9,17 +9,15 @@ import shutil
 
 # ===== pipeline steps =====
 
-from pipeline.step01_setup import setup_base_environment, clear_memory
-from pipeline.step01_setup import run as setup_run
+from .step01_setup import setup_base_environment, clear_memory
+from .step01_setup import run as setup_run
 
-from pipeline.step02_biplet import normalize_image_sizes_biplet
-from pipeline.step03_dino import get_image_pairs_dino
-from pipeline.step04_mast3r import (
-    load_mast3r_model,
-    run_mast3r_pairs
-)
-from pipeline.step05_process1 import extract_colmap_data, save_colmap_reconstruction
-from pipeline.step06_gaussiansplat import train_gaussian_splatting
+from .step02_biplet import normalize_image_sizes_biplet
+from .step03_dino import get_image_pairs_dino
+from .step04_mast3r import load_mast3r_model,　run_mast3r_pairs
+
+from .step05_process1 import extract_colmap_data, save_colmap_reconstruction
+from .step06_gaussiansplat import train_gaussian_splatting
 
 cfg = {}
 cfg = setup_run(cfg)
