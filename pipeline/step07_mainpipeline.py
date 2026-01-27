@@ -17,7 +17,7 @@ from pipeline.step04_mast3r import (
 from pipeline.step05_process1 import extract_colmap_data, save_colmap_reconstruction
 from pipeline.step06_gaussiansplat import train_gaussian_splatting
 
-
+# ==========================
 
 
 def main_pipeline(image_dir, output_dir, square_size=224, iterations=2000, 
