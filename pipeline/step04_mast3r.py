@@ -3,6 +3,7 @@
 # ============================================================================
 import os
 from pipeline.config import Config
+from utils import clear_memory, get_memory_info
 
 def load_mast3r_model(device='cuda'):
     """Load MASt3R model"""
