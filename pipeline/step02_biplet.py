@@ -2,8 +2,8 @@
 # Step 0: Biplet-Square Normalization (PRESERVED FROM ORIGINAL)
 # ============================================================================
 import os
-from pipeline.config import Config
-from pipeline.utils import clear_memory, get_memory_info
+from .utils import clear_memory, get_memory_info
+from .config import Config
 
 def normalize_image_sizes_biplet(input_dir, output_dir=None, size=1024):
     """
