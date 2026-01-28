@@ -234,23 +234,75 @@ def write_points3d_binary_traditional(pts3d, colors, output_file):
 
     return len(valid_indices)
 
-
-def save_colmap_reconstruction_traditional(pts3d, colors, cameras, poses, image_paths, output_dir):
-    """Traditional Method: Save COLMAP reconstruction."""
-    print("\n=== [TRADITIONAL] Saving COLMAP reconstruction ===")
-
-    sparse_dir = Path(output_dir) / 'sparse_traditional' / '0'
-    sparse_dir.mkdir(parents=True, exist_ok=True)
-
-    write_cameras_binary_traditional(cameras, sparse_dir / 'cameras.bin')
-    print(f"  ✓ Wrote {len(cameras)} cameras")
-
-    write_images_binary_traditional(image_paths, cameras, poses, sparse_dir / 'images.bin')
-    print(f"  ✓ Wrote {len(image_paths)} images")
-
-    num_points = write_points3d_binary_traditional(pts3d, colors, sparse_dir / 'points3D.bin')
-    print(f"  ✓ Wrote {num_points} 3D points")
-
-    print(f"\n✓ Traditional COLMAP reconstruction saved to {sparse_dir}")
-
-    return sparse_dir
+def save_colmap_reconstruction_traditional(pts3d, colors, cameras, poses, colmap_dir):
+    """
+    Save COLMAP reconstruction in traditional format.
+    
+    Args:
+        pts3d: 3D points array (N, 3)
+        colors: Color array (N, 3)
+        cameras: List of camera dictionaries with intrinsics
+        poses: Camera poses (world-to-camera)
+        colmap_dir: Directory to save COLMAP files
+    """
+    # 修正：sparse_traditional を sparse に変更
+    output_path = os.path.join(output_dir, "colmap", "sparse", "0")
+    os.makedirs(output_path, exist_ok=True)
+    
+    # カメラを保存
+    cameras_file = os.path.join(output_path, "cameras.txt")
+    with open(cameras_file, 'w') as f:
+        f.write("# Camera list with one line of data per camera:\n")
+        f.write("# CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
+        
+        for i in range(len(focals)):
+            fx = focals[i, 0] * image_size / 224
+            fy = focals[i, 0] * image_size / 224
+            cx = (principal_points[i, 0] + 1) * image_size / 2
+            cy = (principal_points[i, 1] + 1) * image_size / 2
+            
+            f.write(f"{i+1} PINHOLE {image_size} {image_size} {fx} {fy} {cx} {cy}\n")
+    
+    print(f"  ✓ Wrote {len(focals)} cameras")
+    
+    # 画像を保存
+    images_file = os.path.join(output_path, "images.txt")
+    with open(images_file, 'w') as f:
+        f.write("# Image list with two lines of data per image:\n")
+        f.write("# IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
+        f.write("# POINTS2D[] as (X, Y, POINT3D_ID)\n")
+        
+        for i in range(len(poses)):
+            pose = poses[i]
+            R = pose[:3, :3]
+            t = pose[:3, 3]
+            
+            # 回転行列をクォータニオンに変換
+            qw, qx, qy, qz = rotation_matrix_to_quaternion(R)
+            
+            f.write(f"{i+1} {qw} {qx} {qy} {qz} {t[0]} {t[1]} {t[2]} {i+1} image_{i:04d}.png\n")
+            f.write("\n")
+    
+    print(f"  ✓ Wrote {len(poses)} images")
+    
+    # 3Dポイントを保存
+    points_file = os.path.join(output_path, "points3D.txt")
+    with open(points_file, 'w') as f:
+        f.write("# 3D point list with one line of data per point:\n")
+        f.write("# POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
+        
+        point_count = 0
+        for i, point in enumerate(pts3d):
+            if max_points and point_count >= max_points:
+                break
+            
+            # 色情報がない場合はグレー
+            color = [128, 128, 128]
+            
+            f.write(f"{i+1} {point[0]} {point[1]} {point[2]} {color[0]} {color[1]} {color[2]} 0.0\n")
+            point_count += 1
+    
+    print(f"  ✓ Wrote {point_count} 3D points")
+    print(f"\n✓ Traditional COLMAP reconstruction saved to {output_path}")
+    
+    return output_path
