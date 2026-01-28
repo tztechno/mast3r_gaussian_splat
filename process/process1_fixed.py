@@ -12,7 +12,7 @@ import os
 from PIL import Image
 
 # ===== Traditional Method: extract_colmap_data (FIXED) =====
-def extract_colmap_data_traditional_fixed(scene, image_paths, max_points=1000000):
+def extract_colmap_data_traditional(scene, image_paths, max_points=1000000):
     """
     Traditional Method (FIXED): Extract COLMAP-compatible data from a MASt3R scene.
     
