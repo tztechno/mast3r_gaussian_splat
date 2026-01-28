@@ -332,3 +332,23 @@ class StandaloneCOLMAPConverter:
                 for img_id, pt2d_idx in zip(pt['image_ids'], pt['point2D_idxs']):
                     f.write(struct.pack('i', img_id))
                     f.write(struct.pack('i', pt2d_idx))
+
+
+
+'''
+
+# StandaloneCOLMAPConverterクラスだけコピーすればOK
+from standalone_colmap_converter import StandaloneCOLMAPConverter
+
+# 使う
+converter = StandaloneCOLMAPConverter()
+colmap_output = converter.convert_mast3r_to_colmap(
+    scene=scene,
+    output_dir="/path/to/output",
+    min_conf_thr=2.0,
+    clean_depth=False,
+    mask_images=True,
+    verbose=True
+)
+
+'''
