@@ -1,11 +1,3 @@
-# =====================================================================
-# CELL 20: Traditional Method Functions (for comparison)　counter added
-# Point3D.binがカメラ座標系になっているのが問題、世界座標系に直すべき
-# The problem is that Point3D.bin is in camera coordinate system. It should be changed to world coordinate system.
-# =====================================================================
-import struct
-import numpy as np
-from pathlib import Path
 
 # ===== Traditional Method: extract_colmap_data =====
 def extract_colmap_data_traditional(scene, image_paths, max_points=1000000):
@@ -224,8 +216,8 @@ def write_points3d_binary_traditional(pts3d, colors, output_file):
             color = colors[point_id]
 
             f.write(struct.pack('Q', point_id))
-            for coord in pt:
-                f.write(struct.pack('d', float(coord)))
+            for coord in np.asarray(pt).ravel(): 
+                    f.write(struct.pack('d', float(coord)))
 
             col_int = (color * 255).astype(np.uint8)
             for c in col_int:
