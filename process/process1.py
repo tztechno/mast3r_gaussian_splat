@@ -110,8 +110,8 @@ def extract_colmap_data_traditional(scene, image_paths, max_points=1000000):
 
     print(f"\n✓ Extracted {len(cameras)} cameras and {len(poses)} poses")
 
-    pts3d = np.asarray(pts3d).reshape(-1, 3)
-    colors = np.asarray(colors).reshape(-1, 3)
+    pts3d = pts3d.reshape(-1, 3)
+    colors = np.ones((len(pts3d), 3)) * 0.5
     
     return pts3d, colors, cameras, poses
 
