@@ -1,8 +1,3 @@
-# =====================================================================
-# CELL 12: COLMAP Export Functions (PINHOLE版) (REVISED 2026/01/26)
-# Point3D.binがカメラ座標系になっているのが問題、世界座標系に直すべき
-# The problem is that Point3D.bin is in camera coordinate system. It should be changed to world coordinate system.
-# =====================================================================
 
 import struct
 import numpy as np
