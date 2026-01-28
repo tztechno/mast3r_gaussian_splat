@@ -245,64 +245,40 @@ def save_colmap_reconstruction_traditional(pts3d, colors, cameras, poses, colmap
         poses: Camera poses (world-to-camera)
         colmap_dir: Directory to save COLMAP files
     """
-    # 修正：sparse_traditional を sparse に変更
-    output_path = os.path.join(output_dir, "colmap", "sparse", "0")
+    # 修正：output_dir を colmap_dir に変更
+    output_path = os.path.join(colmap_dir, "sparse", "0")
     os.makedirs(output_path, exist_ok=True)
     
-    # カメラを保存
-    cameras_file = os.path.join(output_path, "cameras.txt")
-    with open(cameras_file, 'w') as f:
+    # Write cameras.txt
+    with open(os.path.join(output_path, "cameras.txt"), "w") as f:
         f.write("# Camera list with one line of data per camera:\n")
-        f.write("# CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-        
-        for i in range(len(focals)):
-            fx = focals[i, 0] * image_size / 224
-            fy = focals[i, 0] * image_size / 224
-            cx = (principal_points[i, 0] + 1) * image_size / 2
-            cy = (principal_points[i, 1] + 1) * image_size / 2
-            
-            f.write(f"{i+1} PINHOLE {image_size} {image_size} {fx} {fy} {cx} {cy}\n")
+        f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
+        for cam in cameras:
+            params_str = " ".join(map(str, cam['params']))
+            f.write(f"{cam['camera_id']} {cam['model']} {cam['width']} {cam['height']} {params_str}\n")
     
-    print(f"  ✓ Wrote {len(focals)} cameras")
-    
-    # 画像を保存
-    images_file = os.path.join(output_path, "images.txt")
-    with open(images_file, 'w') as f:
+    # Write images.txt
+    with open(os.path.join(output_path, "images.txt"), "w") as f:
         f.write("# Image list with two lines of data per image:\n")
-        f.write("# IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
-        f.write("# POINTS2D[] as (X, Y, POINT3D_ID)\n")
-        
-        for i in range(len(poses)):
-            pose = poses[i]
+        f.write("#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
+        f.write("#   POINTS2D[] as (X, Y, POINT3D_ID)\n")
+        for i, pose in enumerate(poses):
+            # Convert rotation matrix to quaternion
             R = pose[:3, :3]
             t = pose[:3, 3]
+            quat = rotation_matrix_to_quaternion(R)
             
-            # 回転行列をクォータニオンに変換
-            qw, qx, qy, qz = rotation_matrix_to_quaternion(R)
-            
-            f.write(f"{i+1} {qw} {qx} {qy} {qz} {t[0]} {t[1]} {t[2]} {i+1} image_{i:04d}.png\n")
-            f.write("\n")
+            f.write(f"{i+1} {quat[0]} {quat[1]} {quat[2]} {quat[3]} ")
+            f.write(f"{t[0]} {t[1]} {t[2]} {i+1} image_{i:04d}.jpg\n")
+            f.write("\n")  # Empty line for POINTS2D
     
-    print(f"  ✓ Wrote {len(poses)} images")
-    
-    # 3Dポイントを保存
-    points_file = os.path.join(output_path, "points3D.txt")
-    with open(points_file, 'w') as f:
+    # Write points3D.txt
+    with open(os.path.join(output_path, "points3D.txt"), "w") as f:
         f.write("# 3D point list with one line of data per point:\n")
-        f.write("# POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
-        
-        point_count = 0
-        for i, point in enumerate(pts3d):
-            if max_points and point_count >= max_points:
-                break
-            
-            # 色情報がない場合はグレー
-            color = [128, 128, 128]
-            
-            f.write(f"{i+1} {point[0]} {point[1]} {point[2]} {color[0]} {color[1]} {color[2]} 0.0\n")
-            point_count += 1
+        f.write("#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
+        for i, (pt, color) in enumerate(zip(pts3d, colors)):
+            r, g, b = (color * 255).astype(int)
+            f.write(f"{i+1} {pt[0]} {pt[1]} {pt[2]} {r} {g} {b} 0.0\n")
     
-    print(f"  ✓ Wrote {point_count} 3D points")
-    print(f"\n✓ Traditional COLMAP reconstruction saved to {output_path}")
-    
+    print(f"✓ Saved COLMAP reconstruction to {output_path}")
     return output_path
