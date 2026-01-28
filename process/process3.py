@@ -1,354 +1,362 @@
 
-class StandaloneCOLMAPConverter:
+import os
+import numpy as np
+import torch
+from PIL import Image
+import struct
+from pathlib import Path
+
+
+def extract_colmap_data(scene, image_paths, max_points=1000000):
     """
-    Standalone COLMAP converter that doesn't depend on colmap_dataset_utils.
-    Directly writes COLMAP binary format files from MASt3R output.
+    Extract COLMAP-compatible camera parameters and 3D points from MASt3R scene
+    
+    Args:
+        scene: MASt3R scene object
+        image_paths: List of image paths
+        max_points: Maximum number of 3D points to extract (default: 1M)
+        
+    Returns:
+        pts3d: 3D点群座標 (N, 3)
+        colors: 点群の色情報 (N, 3)
+        cameras: カメラパラメータの辞書リスト
+        poses: ワールドtoカメラ姿勢行列 (N, 4, 4)
     """
+    print("\n=== Extracting COLMAP-compatible data ===")
     
-    def __init__(self):
-        pass
+    # Extract point cloud
+    pts_all = scene.get_pts3d()
+    print(f"pts_all type: {type(pts_all)}")
     
-    def convert_mast3r_to_colmap(
-        self,
-        scene,
-        output_dir: str,
-        min_conf_thr: float = 2.0,
-        clean_depth: bool = False,
-        mask_images: bool = True,
-        verbose: bool = True
-    ) -> str:
-        """
-        Convert MASt3R scene to COLMAP format without external dependencies.
-        """
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+    if isinstance(pts_all, list):
+        print(f"pts_all is a list with {len(pts_all)} elements")
+        if len(pts_all) > 0:
+            print(f"First element type: {type(pts_all[0])}")
+            if hasattr(pts_all[0], 'shape'):
+                print(f"First element shape: {pts_all[0].shape}")
         
-        # Create subdirectories
-        sparse_dir = output_path / "sparse" / "0"
-        sparse_dir.mkdir(parents=True, exist_ok=True)
+        pts_all = torch.stack([p if isinstance(p, torch.Tensor) else torch.tensor(p) 
+                              for p in pts_all])
+        print(f"pts_all shape after conversion: {pts_all.shape}")
+    
+    if len(pts_all.shape) == 4:
+        print(f"Found batched point cloud: {pts_all.shape}")
+        B, H, W, _ = pts_all.shape
+        pts3d = pts_all.reshape(-1, 3).detach().cpu().numpy()  
         
-        images_dir = output_path / "images"
-        images_dir.mkdir(parents=True, exist_ok=True)
+        # Extract colors
+        colors = []
+        for img_path in image_paths:
+            img = Image.open(img_path).resize((W, H))
+            colors.append(np.array(img))
+        colors = np.stack(colors).reshape(-1, 3) / 255.0
+    else:
+        pts3d = pts_all.detach().cpu().numpy() if isinstance(pts_all, torch.Tensor) else pts_all
+        colors = np.ones((len(pts3d), 3)) * 0.5
+    
+    print(f"✓ Extracted {len(pts3d)} 3D points from {len(image_paths)} images")
+    
+    # **DOWNSAMPLE POINTS TO REDUCE MEMORY USAGE**
+    if len(pts3d) > max_points:
+        print(f"\n⚠ Downsampling from {len(pts3d)} to {max_points} points to reduce memory usage...")
         
-        depth_dir = output_path / "stereo" / "depth_maps"
-        depth_dir.mkdir(parents=True, exist_ok=True)
+        # Remove invalid points first
+        valid_mask = ~(np.isnan(pts3d).any(axis=1) | np.isinf(pts3d).any(axis=1))
+        pts3d_valid = pts3d[valid_mask]
+        colors_valid = colors[valid_mask]
         
-        normal_dir = output_path / "stereo" / "normal_maps"
-        normal_dir.mkdir(parents=True, exist_ok=True)
+        # Random sampling
+        indices = np.random.choice(len(pts3d_valid), size=max_points, replace=False)
+        pts3d = pts3d_valid[indices]
+        colors = colors_valid[indices]
         
-        if mask_images:
-            mask_dir = output_path / "stereo" / "confidence_maps"
-            mask_dir.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Downsampled to {len(pts3d)} points")
+    
+    # Extract camera parameters
+    print("Extracting camera parameters...")
+    
+    # MASt3Rのポーズはcamera-to-world形式
+    # COLMAPはworld-to-camera形式を要求するので逆行列が必要
+    poses_c2w = scene.get_im_poses().detach().cpu().numpy()
+    print(f"Retrieved camera-to-world poses: shape {poses_c2w.shape}")
+    
+    # camera-to-world を world-to-camera に変換
+    poses = []
+    for i, pose_c2w in enumerate(poses_c2w):
+        pose_w2c = np.linalg.inv(pose_c2w)
+        poses.append(pose_w2c)
+    
+    poses = np.array(poses)
+    print(f"Converted to world-to-camera poses for COLMAP")
+    
+    # 焦点距離と主点を取得
+    focals = scene.get_focals().detach().cpu().numpy()
+    pp = scene.get_principal_points().detach().cpu().numpy()
+    print(f"Focals shape: {focals.shape}")
+    print(f"Principal points shape: {pp.shape}")
+    
+    # MASt3Rの処理サイズ（通常224x224）
+    mast3r_size = 224.0
+    
+    cameras = []
+    for i, img_path in enumerate(image_paths):
+        img = Image.open(img_path)
+        W, H = img.size
+        
+        # 元画像サイズとのスケール比
+        scale = W / mast3r_size
+        
+        # focalsは[N,1]の形式（fx=fyの等方性カメラ）
+        if focals.shape[1] == 1:
+            focal_mast3r = float(focals[i, 0])
+            fx = fy = focal_mast3r * scale
         else:
-            mask_dir = None
+            fx = float(focals[i, 0]) * scale
+            fy = float(focals[i, 1]) * scale
         
-        if verbose:
-            print(f"Converting MASt3R scene to COLMAP format...")
-            print(f"Output directory: {output_dir}")
+        # 主点もスケーリング
+        cx = float(pp[i, 0]) * scale
+        cy = float(pp[i, 1]) * scale
         
-        # Extract camera parameters and poses from scene
-        cameras, images_data, points3D = self._extract_from_scene(
-            scene, min_conf_thr, verbose
-        )
+        camera = {
+            'camera_id': i + 1,
+            'model': 'PINHOLE',
+            'width': W,
+            'height': H,
+            'params': [fx, fy, cx, cy]
+        }
+        cameras.append(camera)
         
-        if verbose:
-            print(f"Extracted {len(cameras)} cameras")
-            print(f"Extracted {len(images_data)} images")
-            print(f"Extracted {len(points3D)} 3D points")
-        
-        # Save images and depth/normal maps
-        self._save_image_data(
-            scene, images_dir, depth_dir, normal_dir, mask_dir,
-            min_conf_thr, verbose
-        )
-        
-        # Write COLMAP binary files
-        self._write_cameras_binary(cameras, sparse_dir / "cameras.bin")
-        self._write_images_binary(images_data, sparse_dir / "images.bin")
-        self._write_points3D_binary(points3D, sparse_dir / "points3D.bin")
-        
-        if verbose:
-            print(f"✓ COLMAP conversion completed")
-            print(f"  Sparse model: {sparse_dir}")
-            print(f"  Images: {images_dir}")
-            print(f"  Depth maps: {depth_dir}")
-            print(f"  Normal maps: {normal_dir}")
-        
-        return str(output_path)
+        if i == 0:
+            print(f"\nExample camera 0:")
+            print(f"  Image size: {W}x{H}")
+            print(f"  MASt3R focal: {focal_mast3r:.2f}, pp: ({pp[i,0]:.2f}, {pp[i,1]:.2f})")
+            print(f"  Scaled fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
+            print(f"  Pose (first row): {poses[i][0]}")
     
-    def _extract_from_scene(self, scene, min_conf_thr: float, verbose: bool):
-        """Extract camera parameters, image data, and 3D points from MASt3R scene."""
-        
-        cameras = {}
-        images_data = {}
-        points3D = {}
-        
-        num_images = len(scene.imgs)
-        
-        for idx in range(num_images):
-            # Get image info
-            img = scene.imgs[idx]
-            h, w = img.shape[:2]
-            
-            # Get camera intrinsics
-            camera_id = 1
-            
-            if camera_id not in cameras:
-                focal_length = max(w, h) * 1.2
-                cx = w / 2.0
-                cy = h / 2.0
-                
-                cameras[camera_id] = {
-                    'id': camera_id,
-                    'model': 'PINHOLE',
-                    'width': w,
-                    'height': h,
-                    'params': np.array([focal_length, focal_length, cx, cy])
-                }
-            
-            # Get camera pose
-            pts3d = scene.get_pts3d(idx)
-            confidence = scene.get_conf(idx)
-            
-            pose = self._estimate_camera_pose(pts3d, confidence, min_conf_thr)
-            qvec, tvec = self._matrix_to_quaternion_translation(pose)
-            
-            image_name = f"image_{idx:04d}.jpg"
-            
-            images_data[idx + 1] = {
-                'id': idx + 1,
-                'qvec': qvec,
-                'tvec': tvec,
-                'camera_id': camera_id,
-                'name': image_name,
-                'xys': np.array([]),
-                'point3D_ids': np.array([])
-            }
-        
-        # Extract 3D points
-        points3D = self._extract_3d_points(scene, min_conf_thr, verbose)
-        
-        return cameras, images_data, points3D
+    print(f"\n✓ Extracted {len(cameras)} cameras and {len(poses)} poses")
     
-    def _estimate_camera_pose(self, pts3d: np.ndarray, confidence: np.ndarray, min_conf_thr: float):
-        """Estimate camera pose from 3D points."""
-        mask = confidence > min_conf_thr
-        valid_pts = pts3d[mask]
-        
-        if len(valid_pts) < 4:
-            return np.eye(4)
-        
-        center = np.median(valid_pts, axis=0)
-        pose = np.eye(4)
-        pose[:3, 3] = -center
-        
-        return pose
-    
-    def _matrix_to_quaternion_translation(self, matrix: np.ndarray):
-        """Convert 4x4 transformation matrix to quaternion and translation."""
-        R = matrix[:3, :3]
-        t = matrix[:3, 3]
-        
-        qw = np.sqrt(1.0 + R[0, 0] + R[1, 1] + R[2, 2]) / 2.0
-        qx = (R[2, 1] - R[1, 2]) / (4.0 * qw)
-        qy = (R[0, 2] - R[2, 0]) / (4.0 * qw)
-        qz = (R[1, 0] - R[0, 1]) / (4.0 * qw)
-        
-        qvec = np.array([qw, qx, qy, qz])
-        return qvec, t
-    
-    def _extract_3d_points(self, scene, min_conf_thr: float, verbose: bool):
-        """Extract 3D points from scene."""
-        points3D = {}
-        point_id = 1
-        
-        num_images = len(scene.imgs)
-        
-        for idx in range(num_images):
-            pts3d = scene.get_pts3d(idx)
-            confidence = scene.get_conf(idx)
-            img = scene.imgs[idx]
-            
-            h, w = pts3d.shape[:2]
-            pts_flat = pts3d.reshape(-1, 3)
-            conf_flat = confidence.reshape(-1)
-            
-            if len(img.shape) == 3:
-                colors = img.reshape(-1, 3)
-            else:
-                colors = np.stack([img.reshape(-1)] * 3, axis=1)
-            
-            mask = conf_flat > min_conf_thr
-            
-            if mask.sum() > 10000:
-                indices = np.where(mask)[0]
-                sampled_indices = np.random.choice(indices, size=10000, replace=False)
-                mask = np.zeros_like(mask, dtype=bool)
-                mask[sampled_indices] = True
-            
-            valid_pts = pts_flat[mask]
-            valid_colors = colors[mask]
-            
-            for pt, color in zip(valid_pts, valid_colors):
-                points3D[point_id] = {
-                    'id': point_id,
-                    'xyz': pt,
-                    'rgb': color.astype(np.uint8),
-                    'error': 0.0,
-                    'image_ids': np.array([idx + 1]),
-                    'point2D_idxs': np.array([0])
-                }
-                point_id += 1
-        
-        return points3D
-    
-    def _save_image_data(self, scene, images_dir, depth_dir, normal_dir, mask_dir, min_conf_thr, verbose):
-        """Save images, depth maps, normal maps, and confidence masks."""
-        num_images = len(scene.imgs)
-        
-        for idx in range(num_images):
-            image_name = f"image_{idx:04d}.jpg"
-            
-            # Save image
-            img = scene.imgs[idx]
-            if img.dtype != np.uint8:
-                img = (img * 255).astype(np.uint8)
-            cv2.imwrite(str(images_dir / image_name), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            
-            # Save depth map
-            pts3d = scene.get_pts3d(idx)
-            depth = np.linalg.norm(pts3d, axis=2)
-            depth_name = image_name.replace('.jpg', '.geometric.bin')
-            self._save_depth_map(depth, depth_dir / depth_name)
-            
-            # Save normal map
-            normals = self._compute_normals_from_depth(pts3d)
-            normal_name = image_name.replace('.jpg', '.geometric.bin')
-            self._save_normal_map(normals, normal_dir / normal_name)
-            
-            # Save confidence mask
-            if mask_dir is not None:
-                confidence = scene.get_conf(idx)
-                mask = (confidence > min_conf_thr).astype(np.uint8) * 255
-                mask_name = image_name.replace('.jpg', '.png')
-                cv2.imwrite(str(mask_dir / mask_name), mask)
-        
-        if verbose:
-            print(f"Saved {num_images} images with depth/normal maps")
-    
-    def _compute_normals_from_depth(self, pts3d: np.ndarray):
-        """Compute surface normals from 3D points."""
-        h, w = pts3d.shape[:2]
-        normals = np.zeros_like(pts3d)
-        
-        for i in range(1, h - 1):
-            for j in range(1, w - 1):
-                px = pts3d[i, j + 1] - pts3d[i, j - 1]
-                py = pts3d[i + 1, j] - pts3d[i - 1, j]
-                normal = np.cross(px, py)
-                norm = np.linalg.norm(normal)
-                if norm > 0:
-                    normals[i, j] = normal / norm
-        
-        return normals
-    
-    def _save_depth_map(self, depth: np.ndarray, path: Path):
-        """Save depth map in COLMAP binary format."""
-        h, w = depth.shape
-        
-        with open(path, 'wb') as f:
-            f.write(struct.pack('i', w))
-            f.write(struct.pack('i', h))
-            f.write(struct.pack('i', 1))
-            depth_flat = depth.astype(np.float32).flatten()
-            f.write(depth_flat.tobytes())
-    
-    def _save_normal_map(self, normals: np.ndarray, path: Path):
-        """Save normal map in COLMAP binary format."""
-        h, w = normals.shape[:2]
-        
-        with open(path, 'wb') as f:
-            f.write(struct.pack('i', w))
-            f.write(struct.pack('i', h))
-            f.write(struct.pack('i', 3))
-            normals_flat = normals.astype(np.float32).reshape(-1)
-            f.write(normals_flat.tobytes())
-    
-    def _write_cameras_binary(self, cameras: Dict, path: Path):
-        """Write cameras.bin in COLMAP binary format."""
-        with open(path, 'wb') as f:
-            f.write(struct.pack('Q', len(cameras)))
-            
-            for camera in cameras.values():
-                f.write(struct.pack('i', camera['id']))
-                f.write(struct.pack('i', 1))  # PINHOLE = 1
-                f.write(struct.pack('Q', camera['width']))
-                f.write(struct.pack('Q', camera['height']))
-                
-                for param in camera['params']:
-                    f.write(struct.pack('d', param))
-    
-    def _write_images_binary(self, images: Dict, path: Path):
-        """Write images.bin in COLMAP binary format."""
-        with open(path, 'wb') as f:
-            f.write(struct.pack('Q', len(images)))
-            
-            for img in images.values():
-                f.write(struct.pack('i', img['id']))
-                
-                for q in img['qvec']:
-                    f.write(struct.pack('d', q))
-                
-                for t in img['tvec']:
-                    f.write(struct.pack('d', t))
-                
-                f.write(struct.pack('i', img['camera_id']))
-                
-                name_bytes = img['name'].encode('utf-8') + b'\x00'
-                f.write(name_bytes)
-                
-                f.write(struct.pack('Q', len(img['xys'])))
-                for xy, p3d_id in zip(img['xys'], img['point3D_ids']):
-                    f.write(struct.pack('dd', xy[0], xy[1]))
-                    f.write(struct.pack('Q', p3d_id))
-    
-    def _write_points3D_binary(self, points3D: Dict, path: Path):
-        """Write points3D.bin in COLMAP binary format."""
-        with open(path, 'wb') as f:
-            f.write(struct.pack('Q', len(points3D)))
-            
-            for pt in points3D.values():
-                f.write(struct.pack('Q', pt['id']))
-                
-                for coord in pt['xyz']:
-                    f.write(struct.pack('d', coord))
-                
-                for c in pt['rgb']:
-                    f.write(struct.pack('B', c))
-                
-                f.write(struct.pack('d', pt['error']))
-                
-                f.write(struct.pack('Q', len(pt['image_ids'])))
-                for img_id, pt2d_idx in zip(pt['image_ids'], pt['point2D_idxs']):
-                    f.write(struct.pack('i', img_id))
-                    f.write(struct.pack('i', pt2d_idx))
+    return pts3d, colors, cameras, poses
 
 
+def save_colmap_reconstruction(pts3d, colors, cameras, poses, image_paths, output_dir):
+    """
+    Save reconstruction in COLMAP binary format
+    
+    Args:
+        pts3d: 3D点群座標
+        colors: 点群の色情報
+        cameras: カメラパラメータリスト
+        poses: カメラ姿勢行列
+        image_paths: 画像パスリスト
+        output_dir: 出力ディレクトリ
+    
+    Returns:
+        sparse_dir: 生成されたCOLMAP sparseディレクトリのパス
+    """
+    print("\n=== Saving COLMAP reconstruction ===")
+    
+    sparse_dir = Path(output_dir) / 'sparse' / '0'
+    sparse_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"  Writing COLMAP files directly to {sparse_dir}...")
+    
+    # Write COLMAP binary files
+    write_cameras_binary(cameras, sparse_dir / 'cameras.bin')
+    print(f"  ✓ Wrote {len(cameras)} cameras")
+    
+    write_images_binary(image_paths, cameras, poses, sparse_dir / 'images.bin')
+    print(f"  ✓ Wrote {len(image_paths)} images")
+    
+    num_points = write_points3d_binary(pts3d, colors, sparse_dir / 'points3D.bin')
+    print(f"  ✓ Wrote {num_points} 3D points")
+    
+    print(f"\n✓ COLMAP reconstruction saved to {sparse_dir}")
+    print(f"  Cameras: {len(cameras)}")
+    print(f"  Images: {len(image_paths)}")
+    print(f"  Points: {num_points}")
+    
+    return sparse_dir
 
-'''
 
-from process3_standalone import main_pipeline_process3_standalone
+def write_cameras_binary(cameras, output_file):
+    """Write cameras.bin in COLMAP binary format"""
+    with open(output_file, 'wb') as f:
+        # Write number of cameras
+        f.write(struct.pack('Q', len(cameras)))
+        
+        for i, cam in enumerate(cameras):
+            camera_id = cam.get('camera_id', i + 1)
+            
+            # Model ID: 1 = PINHOLE
+            model_id = 1
+            width = cam['width']
+            height = cam['height']
+            params = cam['params']  # [fx, fy, cx, cy]
+            
+            f.write(struct.pack('i', camera_id))
+            f.write(struct.pack('i', model_id))
+            f.write(struct.pack('Q', width))
+            f.write(struct.pack('Q', height))
+            
+            # Write 4 parameters for PINHOLE model
+            for param in params[:4]:
+                f.write(struct.pack('d', param))
 
-gs_model = main_pipeline_process3_standalone(
-    image_dir="/kaggle/input/two-dogs/bike15",
-    output_dir="/kaggle/working/output",
-    square_size=512,
-    iterations=30000,
-    max_images=None,
-    min_conf_thr=2.0,
-    clean_depth=False,
-    mask_images=True,
-    verbose=True
-)
 
-'''
+def write_images_binary(image_paths, cameras, poses, output_file):
+    """Write images.bin in COLMAP binary format"""
+    with open(output_file, 'wb') as f:
+        # Write number of images
+        f.write(struct.pack('Q', len(image_paths)))
+        
+        for i, (img_path, pose) in enumerate(zip(image_paths, poses)):
+            image_id = i + 1
+            camera_id = cameras[i].get('camera_id', i + 1)
+            image_name = os.path.basename(img_path)
+            
+            # Extract rotation and translation
+            R = pose[:3, :3]
+            t = pose[:3, 3]
+            
+            # Convert rotation matrix to quaternion [w, x, y, z]
+            qvec = rotmat2qvec(R)
+            tvec = t
+            
+            # Write image data
+            f.write(struct.pack('i', image_id))
+            
+            # Write quaternion (4 doubles)
+            for q in qvec:
+                f.write(struct.pack('d', float(q)))
+            
+            # Write translation vector (3 doubles)
+            for tv in tvec:
+                f.write(struct.pack('d', float(tv)))
+            
+            # Write camera ID
+            f.write(struct.pack('i', camera_id))
+            
+            # Write image name (null-terminated string)
+            f.write(image_name.encode('utf-8') + b'\x00')
+            
+            # Write number of 2D points (0 for now)
+            f.write(struct.pack('Q', 0))
+
+
+def write_points3d_binary(pts3d, colors, output_file):
+    """Write points3D.bin in COLMAP binary format"""
+    # Filter out invalid points
+    valid_indices = []
+    for i, pt in enumerate(pts3d):
+        if not (np.isnan(pt).any() or np.isinf(pt).any()):
+            valid_indices.append(i)
+    
+    with open(output_file, 'wb') as f:
+        # Write number of points
+        f.write(struct.pack('Q', len(valid_indices)))
+        
+        for idx, point_id in enumerate(valid_indices):
+            pt = pts3d[point_id]
+            color = colors[point_id]
+            
+            # Write point3D ID
+            f.write(struct.pack('Q', point_id))
+            
+            # Write XYZ coordinates (3 doubles)
+            for coord in pt:
+                f.write(struct.pack('d', float(coord)))
+            
+            # Write RGB color (3 unsigned chars)
+            col_int = (color * 255).astype(np.uint8)
+            for c in col_int:
+                f.write(struct.pack('B', int(c)))
+            
+            # Write error (1 double) - set to 0
+            f.write(struct.pack('d', 0.0))
+            
+            # Write track length
+            f.write(struct.pack('Q', 0))
+            
+            # Progress indicator
+            if (idx + 1) % 1000000 == 0:
+                print(f"    Wrote {idx + 1} / {len(valid_indices)} points...")
+    
+    return len(valid_indices)
+
+
+def rotmat2qvec(R):
+    """
+    Convert rotation matrix to quaternion in COLMAP format [w, x, y, z]
+    
+    Args:
+        R: 3x3 rotation matrix
+        
+    Returns:
+        qvec: quaternion [w, x, y, z]
+    """
+    # Ensure R is a numpy array
+    R = np.asarray(R, dtype=np.float64)
+    
+    # Calculate trace
+    trace = np.trace(R)
+    
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (R[2, 1] - R[1, 2]) * s
+        y = (R[0, 2] - R[2, 0]) * s
+        z = (R[1, 0] - R[0, 1]) * s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+    
+    qvec = np.array([w, x, y, z], dtype=np.float64)
+    
+    # Normalize
+    qvec = qvec / np.linalg.norm(qvec)
+    
+    return qvec
+
+
+def process_mast3r_to_colmap(scene, image_paths, output_dir, max_points=1000000):
+    """
+    メイン処理関数: MASt3Rの出力をCOLMAP形式に変換して保存
+    
+    Args:
+        scene: MASt3R scene object
+        image_paths: 画像パスのリスト
+        output_dir: 出力ディレクトリ
+        max_points: 抽出する最大点群数
+    
+    Returns:
+        sparse_dir: 生成されたCOLMAP sparseディレクトリのパス
+    """
+    # COLMAP互換データを抽出
+    pts3d, colors, cameras, poses = extract_colmap_data(
+        scene, image_paths, max_points
+    )
+    
+    # COLMAP形式で保存
+    sparse_dir = save_colmap_reconstruction(
+        pts3d, colors, cameras, poses, image_paths, output_dir
+    )
+    
+    return sparse_dir
+
+
