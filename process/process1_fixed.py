@@ -317,7 +317,7 @@ def write_points3d_binary_traditional(pts3d, colors, output_file):
     return len(valid_indices)
 
 
-def save_colmap_reconstruction_traditional_fixed(pts3d, colors, cameras, poses, image_paths, output_dir):
+def save_colmap_reconstruction_traditional(pts3d, colors, cameras, poses, image_paths, output_dir):
     """Traditional Method (FIXED): Save COLMAP reconstruction."""
     print("\n=== [TRADITIONAL FIXED] Saving COLMAP reconstruction ===")
 
