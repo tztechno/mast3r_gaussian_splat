@@ -1,468 +1,283 @@
-import numpy as np
+"""
+CORRECTED main_pipeline_process3 function
+==========================================
+This version correctly calls convert_mast3r_to_colmap_standalone without colmap_utils_path
+"""
+
 import os
-from pathlib import Path
-import struct
-import cv2
-from typing import Dict, List, Tuple, Optional
+import sys
+import numpy as np
 import torch
-
-class StandaloneCOLMAPConverter:
-    """
-    Standalone COLMAP converter that doesn't depend on colmap_dataset_utils.
-    Directly writes COLMAP binary format files from MASt3R output.
-    """
-    
-    def __init__(self):
-        pass
-    
-    def convert_mast3r_to_colmap(
-        self,
-        scene,
-        output_dir: str,
-        min_conf_thr: float = 2.0,
-        clean_depth: bool = False,
-        mask_images: bool = True,
-        verbose: bool = True
-    ) -> str:
-        """
-        Convert MASt3R scene to COLMAP format without external dependencies.
-        
-        Args:
-            scene: MASt3R scene object
-            output_dir: Output directory for COLMAP files
-            min_conf_thr: Minimum confidence threshold
-            clean_depth: Whether to clean depth maps
-            mask_images: Whether to save confidence masks
-            verbose: Verbose output
-            
-        Returns:
-            Path to COLMAP output directory
-        """
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        # Create subdirectories
-        sparse_dir = output_path / "sparse" / "0"
-        sparse_dir.mkdir(parents=True, exist_ok=True)
-        
-        images_dir = output_path / "images"
-        images_dir.mkdir(parents=True, exist_ok=True)
-        
-        depth_dir = output_path / "stereo" / "depth_maps"
-        depth_dir.mkdir(parents=True, exist_ok=True)
-        
-        normal_dir = output_path / "stereo" / "normal_maps"
-        normal_dir.mkdir(parents=True, exist_ok=True)
-        
-        if mask_images:
-            mask_dir = output_path / "stereo" / "confidence_maps"
-            mask_dir.mkdir(parents=True, exist_ok=True)
-        
-        if verbose:
-            print(f"Converting MASt3R scene to COLMAP format...")
-            print(f"Output directory: {output_dir}")
-        
-        # Extract camera parameters and poses from scene
-        cameras, images_data, points3D = self._extract_from_scene(
-            scene, min_conf_thr, verbose
-        )
-        
-        if verbose:
-            print(f"Extracted {len(cameras)} cameras")
-            print(f"Extracted {len(images_data)} images")
-            print(f"Extracted {len(points3D)} 3D points")
-        
-        # Save images and depth/normal maps
-        self._save_image_data(
-            scene, images_dir, depth_dir, normal_dir, 
-            mask_dir if mask_images else None,
-            min_conf_thr, verbose
-        )
-        
-        # Write COLMAP binary files
-        self._write_cameras_binary(cameras, sparse_dir / "cameras.bin")
-        self._write_images_binary(images_data, sparse_dir / "images.bin")
-        self._write_points3D_binary(points3D, sparse_dir / "points3D.bin")
-        
-        if verbose:
-            print(f"✓ COLMAP conversion completed")
-            print(f"  Sparse model: {sparse_dir}")
-            print(f"  Images: {images_dir}")
-            print(f"  Depth maps: {depth_dir}")
-            print(f"  Normal maps: {normal_dir}")
-        
-        return str(output_path)
-    
-    def _extract_from_scene(
-        self, 
-        scene, 
-        min_conf_thr: float,
-        verbose: bool
-    ) -> Tuple[Dict, Dict, Dict]:
-        """Extract camera parameters, image data, and 3D points from MASt3R scene."""
-        
-        cameras = {}
-        images_data = {}
-        points3D = {}
-        
-        num_images = len(scene.imgs)
-        
-        for idx in range(num_images):
-            # Get image info
-            img = scene.imgs[idx]
-            h, w = img.shape[:2]
-            
-            # Get camera intrinsics (assuming PINHOLE model)
-            # MASt3R typically uses a simple camera model
-            camera_id = 1  # Using single camera model for all images
-            
-            if camera_id not in cameras:
-                # Estimate focal length (typical assumption)
-                focal_length = max(w, h) * 1.2
-                cx = w / 2.0
-                cy = h / 2.0
-                
-                cameras[camera_id] = {
-                    'id': camera_id,
-                    'model': 'PINHOLE',
-                    'width': w,
-                    'height': h,
-                    'params': np.array([focal_length, focal_length, cx, cy])
-                }
-            
-            # Get camera pose
-            # MASt3R provides world-to-camera transformation
-            pts3d = scene.get_pts3d(idx)
-            confidence = scene.get_conf(idx)
-            
-            # Estimate camera pose from 3D points
-            pose = self._estimate_camera_pose(pts3d, confidence, min_conf_thr)
-            
-            # Convert to quaternion + translation
-            qvec, tvec = self._matrix_to_quaternion_translation(pose)
-            
-            image_name = f"image_{idx:04d}.jpg"
-            
-            images_data[idx + 1] = {
-                'id': idx + 1,
-                'qvec': qvec,
-                'tvec': tvec,
-                'camera_id': camera_id,
-                'name': image_name,
-                'xys': np.array([]),  # 2D points (empty for now)
-                'point3D_ids': np.array([])  # Corresponding 3D point IDs
-            }
-        
-        # Extract 3D points from dense reconstruction
-        points3D = self._extract_3d_points(scene, min_conf_thr, verbose)
-        
-        return cameras, images_data, points3D
-    
-    def _estimate_camera_pose(
-        self, 
-        pts3d: np.ndarray, 
-        confidence: np.ndarray,
-        min_conf_thr: float
-    ) -> np.ndarray:
-        """Estimate camera pose from 3D points."""
-        
-        # Filter by confidence
-        mask = confidence > min_conf_thr
-        valid_pts = pts3d[mask]
-        
-        if len(valid_pts) < 4:
-            # Return identity if not enough points
-            return np.eye(4)
-        
-        # Use median point as camera center approximation
-        center = np.median(valid_pts, axis=0)
-        
-        # Simple pose estimation (can be improved)
-        pose = np.eye(4)
-        pose[:3, 3] = -center
-        
-        return pose
-    
-    def _matrix_to_quaternion_translation(
-        self, 
-        matrix: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Convert 4x4 transformation matrix to quaternion and translation."""
-        
-        R = matrix[:3, :3]
-        t = matrix[:3, 3]
-        
-        # Convert rotation matrix to quaternion (w, x, y, z)
-        qw = np.sqrt(1.0 + R[0, 0] + R[1, 1] + R[2, 2]) / 2.0
-        qx = (R[2, 1] - R[1, 2]) / (4.0 * qw)
-        qy = (R[0, 2] - R[2, 0]) / (4.0 * qw)
-        qz = (R[1, 0] - R[0, 1]) / (4.0 * qw)
-        
-        qvec = np.array([qw, qx, qy, qz])
-        
-        return qvec, t
-    
-    def _extract_3d_points(
-        self, 
-        scene, 
-        min_conf_thr: float,
-        verbose: bool
-    ) -> Dict:
-        """Extract 3D points from scene."""
-        
-        points3D = {}
-        point_id = 1
-        
-        num_images = len(scene.imgs)
-        
-        for idx in range(num_images):
-            pts3d = scene.get_pts3d(idx)
-            confidence = scene.get_conf(idx)
-            img = scene.imgs[idx]
-            
-            # Flatten to point list
-            h, w = pts3d.shape[:2]
-            pts_flat = pts3d.reshape(-1, 3)
-            conf_flat = confidence.reshape(-1)
-            
-            # Get colors
-            if len(img.shape) == 3:
-                colors = img.reshape(-1, 3)
-            else:
-                colors = np.stack([img.reshape(-1)] * 3, axis=1)
-            
-            # Filter by confidence
-            mask = conf_flat > min_conf_thr
-            
-            # Sample points to avoid too many
-            if mask.sum() > 10000:
-                indices = np.where(mask)[0]
-                sampled_indices = np.random.choice(
-                    indices, 
-                    size=10000, 
-                    replace=False
-                )
-                mask = np.zeros_like(mask, dtype=bool)
-                mask[sampled_indices] = True
-            
-            valid_pts = pts_flat[mask]
-            valid_colors = colors[mask]
-            
-            for pt, color in zip(valid_pts, valid_colors):
-                points3D[point_id] = {
-                    'id': point_id,
-                    'xyz': pt,
-                    'rgb': color.astype(np.uint8),
-                    'error': 0.0,
-                    'image_ids': np.array([idx + 1]),
-                    'point2D_idxs': np.array([0])
-                }
-                point_id += 1
-        
-        if verbose:
-            print(f"Extracted {len(points3D)} 3D points")
-        
-        return points3D
-    
-    def _save_image_data(
-        self,
-        scene,
-        images_dir: Path,
-        depth_dir: Path,
-        normal_dir: Path,
-        mask_dir: Optional[Path],
-        min_conf_thr: float,
-        verbose: bool
-    ):
-        """Save images, depth maps, normal maps, and confidence masks."""
-        
-        num_images = len(scene.imgs)
-        
-        for idx in range(num_images):
-            image_name = f"image_{idx:04d}.jpg"
-            
-            # Save image
-            img = scene.imgs[idx]
-            if img.dtype != np.uint8:
-                img = (img * 255).astype(np.uint8)
-            cv2.imwrite(str(images_dir / image_name), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            
-            # Save depth map
-            pts3d = scene.get_pts3d(idx)
-            depth = np.linalg.norm(pts3d, axis=2)
-            depth_name = image_name.replace('.jpg', '.geometric.bin')
-            self._save_depth_map(depth, depth_dir / depth_name)
-            
-            # Save normal map (if available)
-            if hasattr(scene, 'get_normals'):
-                normals = scene.get_normals(idx)
-            else:
-                # Compute normals from depth
-                normals = self._compute_normals_from_depth(pts3d)
-            
-            normal_name = image_name.replace('.jpg', '.geometric.bin')
-            self._save_normal_map(normals, normal_dir / normal_name)
-            
-            # Save confidence mask
-            if mask_dir is not None:
-                confidence = scene.get_conf(idx)
-                mask = (confidence > min_conf_thr).astype(np.uint8) * 255
-                mask_name = image_name.replace('.jpg', '.png')
-                cv2.imwrite(str(mask_dir / mask_name), mask)
-        
-        if verbose:
-            print(f"Saved {num_images} images with depth/normal maps")
-    
-    def _compute_normals_from_depth(self, pts3d: np.ndarray) -> np.ndarray:
-        """Compute surface normals from 3D points."""
-        
-        h, w = pts3d.shape[:2]
-        normals = np.zeros_like(pts3d)
-        
-        # Compute gradients
-        for i in range(1, h - 1):
-            for j in range(1, w - 1):
-                # Get neighboring points
-                p = pts3d[i, j]
-                px = pts3d[i, j + 1] - pts3d[i, j - 1]
-                py = pts3d[i + 1, j] - pts3d[i - 1, j]
-                
-                # Cross product for normal
-                normal = np.cross(px, py)
-                norm = np.linalg.norm(normal)
-                if norm > 0:
-                    normals[i, j] = normal / norm
-        
-        return normals
-    
-    def _save_depth_map(self, depth: np.ndarray, path: Path):
-        """Save depth map in COLMAP binary format."""
-        
-        h, w = depth.shape
-        
-        with open(path, 'wb') as f:
-            # Write header
-            f.write(struct.pack('i', w))
-            f.write(struct.pack('i', h))
-            f.write(struct.pack('i', 1))  # Number of channels
-            
-            # Write depth data
-            depth_flat = depth.astype(np.float32).flatten()
-            f.write(depth_flat.tobytes())
-    
-    def _save_normal_map(self, normals: np.ndarray, path: Path):
-        """Save normal map in COLMAP binary format."""
-        
-        h, w = normals.shape[:2]
-        
-        with open(path, 'wb') as f:
-            # Write header
-            f.write(struct.pack('i', w))
-            f.write(struct.pack('i', h))
-            f.write(struct.pack('i', 3))  # Number of channels (x, y, z)
-            
-            # Write normal data
-            normals_flat = normals.astype(np.float32).reshape(-1)
-            f.write(normals_flat.tobytes())
-    
-    def _write_cameras_binary(self, cameras: Dict, path: Path):
-        """Write cameras.bin in COLMAP binary format."""
-        
-        with open(path, 'wb') as f:
-            f.write(struct.pack('Q', len(cameras)))
-            
-            for camera in cameras.values():
-                f.write(struct.pack('i', camera['id']))
-                
-                # Model type (PINHOLE = 1)
-                f.write(struct.pack('i', 1))
-                
-                f.write(struct.pack('Q', camera['width']))
-                f.write(struct.pack('Q', camera['height']))
-                
-                # Parameters
-                for param in camera['params']:
-                    f.write(struct.pack('d', param))
-    
-    def _write_images_binary(self, images: Dict, path: Path):
-        """Write images.bin in COLMAP binary format."""
-        
-        with open(path, 'wb') as f:
-            f.write(struct.pack('Q', len(images)))
-            
-            for img in images.values():
-                f.write(struct.pack('i', img['id']))
-                
-                # Quaternion (qw, qx, qy, qz)
-                for q in img['qvec']:
-                    f.write(struct.pack('d', q))
-                
-                # Translation
-                for t in img['tvec']:
-                    f.write(struct.pack('d', t))
-                
-                f.write(struct.pack('i', img['camera_id']))
-                
-                # Image name (null-terminated string)
-                name_bytes = img['name'].encode('utf-8') + b'\x00'
-                f.write(name_bytes)
-                
-                # 2D points
-                f.write(struct.pack('Q', len(img['xys'])))
-                for xy, p3d_id in zip(img['xys'], img['point3D_ids']):
-                    f.write(struct.pack('dd', xy[0], xy[1]))
-                    f.write(struct.pack('Q', p3d_id))
-    
-    def _write_points3D_binary(self, points3D: Dict, path: Path):
-        """Write points3D.bin in COLMAP binary format."""
-        
-        with open(path, 'wb') as f:
-            f.write(struct.pack('Q', len(points3D)))
-            
-            for pt in points3D.values():
-                f.write(struct.pack('Q', pt['id']))
-                
-                # XYZ
-                for coord in pt['xyz']:
-                    f.write(struct.pack('d', coord))
-                
-                # RGB
-                for c in pt['rgb']:
-                    f.write(struct.pack('B', c))
-                
-                # Error
-                f.write(struct.pack('d', pt['error']))
-                
-                # Track
-                f.write(struct.pack('Q', len(pt['image_ids'])))
-                for img_id, pt2d_idx in zip(pt['image_ids'], pt['point2D_idxs']):
-                    f.write(struct.pack('i', img_id))
-                    f.write(struct.pack('i', pt2d_idx))
+from pathlib import Path
+import subprocess
+import shutil
+from standalone_colmap_converter import convert_mast3r_to_colmap_standalone
 
 
-def convert_mast3r_to_colmap_standalone(
-    scene,
+def main_pipeline_process3(
+    image_dir: str,
     output_dir: str,
+    square_size: int = 512,
+    iterations: int = 30000,
+    max_images = None,
+    max_pairs: int = 100000,
     min_conf_thr: float = 2.0,
     clean_depth: bool = False,
     mask_images: bool = True,
+    colmap_utils_path = None,  # IGNORED - kept for backward compatibility
     verbose: bool = True
-) -> str:
+):
     """
-    Standalone function to convert MASt3R scene to COLMAP format.
+    Complete pipeline using Process 3 with standalone COLMAP converter.
     
     Args:
-        scene: MASt3R scene object
-        output_dir: Output directory
+        image_dir: Directory containing input images
+        output_dir: Output directory for results
+        square_size: Size for image resizing
+        iterations: Number of training iterations
+        max_images: Maximum number of images to process
+        max_pairs: Maximum number of image pairs
         min_conf_thr: Minimum confidence threshold
         clean_depth: Whether to clean depth maps
         mask_images: Whether to save confidence masks
+        colmap_utils_path: IGNORED (kept for backward compatibility)
         verbose: Verbose output
         
     Returns:
-        Path to COLMAP output directory
+        Trained Gaussian Splatting model or None if failed
     """
-    converter = StandaloneCOLMAPConverter()
-    return converter.convert_mast3r_to_colmap(
-        scene, output_dir, min_conf_thr, clean_depth, mask_images, verbose
-    )
+    
+    # Create output directories
+    os.makedirs(output_dir, exist_ok=True)
+    mast3r_dir = os.path.join(output_dir, "mast3r_output")
+    colmap_dir = os.path.join(output_dir, "colmap_output")
+    gs_dir = os.path.join(output_dir, "gaussian_splatting")
+    
+    print("=" * 70)
+    print("Process 3: MASt3R -> COLMAP -> Gaussian Splatting (Standalone)")
+    print("=" * 70)
+    print(f"Image directory: {image_dir}")
+    print(f"Output directory: {output_dir}")
+    print(f"Square size: {square_size}")
+    print(f"Max images: {max_images}")
+    print(f"Confidence threshold: {min_conf_thr}")
+    if colmap_utils_path:
+        print(f"Note: colmap_utils_path is ignored (using standalone converter)")
+    print("=" * 70)
+    
+    # Step 1: Load and prepare images
+    print("\n" + "=" * 70)
+    print("Step 1: Loading Images")
+    print("=" * 70)
+    
+    try:
+        from PIL import Image
+        import glob
+        
+        image_files = sorted(glob.glob(os.path.join(image_dir, "*.[jp][pn]g")))
+        
+        if max_images:
+            image_files = image_files[:max_images]
+        
+        print(f"Found {len(image_files)} images")
+        
+        if len(image_files) == 0:
+            raise ValueError("No images found in directory")
+        
+        # Load images
+        images = []
+        for img_path in image_files:
+            img = Image.open(img_path).convert('RGB')
+            # Resize if needed
+            if square_size:
+                img = img.resize((square_size, square_size), Image.Resampling.LANCZOS)
+            images.append(np.array(img))
+        
+        print(f"✓ Loaded {len(images)} images")
+        
+    except Exception as e:
+        print(f"❌ Error loading images: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    
+    # Step 2: Run MASt3R reconstruction
+    print("\n" + "=" * 70)
+    print("Step 2: Running MASt3R Reconstruction")
+    print("=" * 70)
+    
+    try:
+        # Check if MASt3R is available
+        try:
+            from mast3r.model import AsymmetricMASt3R
+            from mast3r.fast_nn import fast_reciprocal_NNs
+            import mast3r.utils.path_to_dust3r
+            from dust3r.inference import inference
+            from dust3r.utils.image import load_images
+            from dust3r.image_pairs import make_pairs
+            from dust3r.cloud_opt import global_aligner, GlobalAlignerMode
+        except ImportError as e:
+            print(f"❌ MASt3R not available: {e}")
+            print("Please install MASt3R first")
+            return None
+        
+        # Load model
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
+        
+        model_name = "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+        model = AsymmetricMASt3R.from_pretrained(model_name).to(device)
+        
+        # Prepare images for MASt3R
+        mast3r_images = [(img, None, img_path) for img, img_path in zip(images, image_files)]
+        
+        # Create pairs
+        pairs = make_pairs(
+            mast3r_images,
+            scene_graph='complete',
+            prefilter=None,
+            symmetrize=True
+        )
+        
+        if max_pairs and len(pairs) > max_pairs:
+            pairs = pairs[:max_pairs]
+        
+        print(f"Processing {len(pairs)} image pairs")
+        
+        # Run inference
+        output = inference(pairs, model, device, batch_size=1, verbose=verbose)
+        
+        # Global alignment
+        scene = global_aligner(
+            output,
+            device=device,
+            mode=GlobalAlignerMode.PointCloudOptimizer,
+            verbose=verbose
+        )
+        
+        # Optimize
+        loss = scene.compute_global_alignment(
+            init='mst',
+            niter=300,
+            schedule='cosine',
+            lr=0.01
+        )
+        
+        print(f"✓ MASt3R reconstruction completed (loss: {loss:.4f})")
+        
+    except Exception as e:
+        print(f"❌ Error during MASt3R reconstruction: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    
+    # Step 3: Convert to COLMAP format (STANDALONE VERSION)
+    print("\n" + "=" * 70)
+    print("Step 3: Converting to COLMAP Format (Standalone)")
+    print("=" * 70)
+    print(f"Confidence threshold: {min_conf_thr}")
+    print(f"Clean depth: {clean_depth}")
+    print(f"Save masks: {mask_images}")
+    print("-" * 70)
+    
+    try:
+        # CORRECTED: No colmap_utils_path argument!
+        colmap_output = convert_mast3r_to_colmap_standalone(
+            scene=scene,
+            output_dir=colmap_dir,
+            min_conf_thr=min_conf_thr,
+            clean_depth=clean_depth,
+            mask_images=mask_images,
+            verbose=verbose
+        )
+        
+        print(f"✓ COLMAP conversion completed")
+        print(f"  Output: {colmap_output}")
+        
+    except Exception as e:
+        print(f"❌ Error during COLMAP conversion: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    
+    # Step 4: Train Gaussian Splatting
+    print("\n" + "=" * 70)
+    print("Step 4: Training Gaussian Splatting")
+    print("=" * 70)
+    print(f"Iterations: {iterations}")
+    print("-" * 70)
+    
+    try:
+        # Check if gaussian-splatting is available
+        gs_available = False
+        
+        # Try to import gaussian_splatting
+        try:
+            import gaussian_splatting
+            gs_available = True
+            print("Using gaussian_splatting Python package")
+        except ImportError:
+            # Try to find gaussian-splatting executable
+            gs_train = shutil.which("gaussian_splatting_train")
+            if gs_train:
+                gs_available = True
+                print(f"Using gaussian-splatting executable: {gs_train}")
+        
+        if not gs_available:
+            print("⚠️  Gaussian Splatting not available, skipping training")
+            print("COLMAP output is ready for manual processing")
+            print(f"You can use the COLMAP data at: {colmap_output}")
+            return None
+        
+        # Train the model
+        if 'gaussian_splatting' in sys.modules:
+            # Use Python API
+            from gaussian_splatting import train
+            
+            model = train(
+                source_path=colmap_output,
+                model_path=gs_dir,
+                iterations=iterations,
+                test_iterations=[],
+                save_iterations=[iterations],
+                checkpoint_iterations=[],
+                quiet=not verbose
+            )
+        else:
+            # Use command-line interface
+            cmd = [
+                gs_train,
+                "-s", colmap_output,
+                "-m", gs_dir,
+                "--iterations", str(iterations),
+                "--test_iterations", str(iterations),
+                "--save_iterations", str(iterations)
+            ]
+            
+            if not verbose:
+                cmd.append("--quiet")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print(f"❌ Gaussian Splatting training failed")
+                print(f"Error: {result.stderr}")
+                return None
+            
+            model = None
+        
+        print(f"✓ Gaussian Splatting training completed")
+        print(f"  Model saved to: {gs_dir}")
+        
+        return model
+        
+    except Exception as e:
+        print(f"❌ Error during Gaussian Splatting training: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# Test that the function is loaded
+print("✓ Corrected main_pipeline_process3 loaded successfully")
+print("✓ Ready to use without colmap_utils_path errors")
