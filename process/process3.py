@@ -337,14 +337,14 @@ class StandaloneCOLMAPConverter:
 
 '''
 
-# StandaloneCOLMAPConverterクラスだけコピーすればOK
-from standalone_colmap_converter import StandaloneCOLMAPConverter
+from process3_standalone import main_pipeline_process3_standalone
 
-# 使う
-converter = StandaloneCOLMAPConverter()
-colmap_output = converter.convert_mast3r_to_colmap(
-    scene=scene,
-    output_dir="/path/to/output",
+gs_model = main_pipeline_process3_standalone(
+    image_dir="/kaggle/input/two-dogs/bike15",
+    output_dir="/kaggle/working/output",
+    square_size=512,
+    iterations=30000,
+    max_images=None,
     min_conf_thr=2.0,
     clean_depth=False,
     mask_images=True,
