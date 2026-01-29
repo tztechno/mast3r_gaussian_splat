@@ -38,6 +38,3 @@ Based on the source provided, here is the comparison of the primary functions of
 
 
 
----
-
-Would you like me to help you draft a technical summary or a README section based on these differences?
