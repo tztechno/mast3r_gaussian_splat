@@ -252,7 +252,7 @@ def extract_3d_points(scene, min_conf_thr: float, verbose: bool) -> Dict:
         if mask.sum() > 10000:
             indices = np.where(mask)[0]
             sampled_indices = np.random.choice(indices, size=10000, replace=False)
-            mask = np.zeros_like(mask, dtype=ool)
+            mask = np.zeros_like(mask, dtype=bool)  # 修正: bool
             mask[sampled_indices] = True
         
         valid_pts = pts_flat[mask]
