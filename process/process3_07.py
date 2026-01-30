@@ -316,8 +316,9 @@ def extract_scene_data(scene, min_conf_thr, verbose):
         if verbose:
             print(f"  Final - Camera {cam_id}: {width}x{height}")
             print(f"  Final - Image {img_id}: qvec={qvec[:4]}, tvec={tvec[:3]}")
-    
-    # 3D点を抽出
+
+
+    # 3D点を抽出（extract_scene_data関数内の該当部分を置き換え）
     if verbose:
         print("\n=== Extracting 3D points ===")
     
@@ -326,60 +327,122 @@ def extract_scene_data(scene, min_conf_thr, verbose):
         if hasattr(scene, 'get_pts3d'):
             pts3d = scene.get_pts3d()
             if pts3d is not None:
-                if isinstance(pts3d, torch.Tensor):
-                    pts3d = pts3d.detach().cpu().numpy()
-                
                 if verbose:
-                    print(f"  pts3d shape: {pts3d.shape}")
                     print(f"  pts3d type: {type(pts3d)}")
                 
-                # 信頼度フィルタリング
-                if hasattr(scene, 'conf'):
-                    conf = scene.conf
-                    if isinstance(conf, torch.Tensor):
-                        conf = conf.detach().cpu().numpy()
-                    
+                # リストの場合の処理
+                if isinstance(pts3d, list):
                     if verbose:
-                        print(f"  conf shape: {conf.shape}")
+                        print(f"  pts3d is a list with {len(pts3d)} elements")
                     
-                    # 信頼度でフィルタリング
-                    if conf.ndim >= 1:
-                        conf_flat = conf.flatten()
-                        pts3d_reshaped = pts3d.reshape(-1, 3)
-                        
-                        mask = conf_flat >= min_conf_thr
-                        pts3d_filtered = pts3d_reshaped[mask]
-                        
+                    # リストの各要素を処理
+                    all_points = []
+                    for i, pts in enumerate(pts3d):
+                        if isinstance(pts, torch.Tensor):
+                            pts = pts.detach().cpu().numpy()
+                        if isinstance(pts, np.ndarray):
+                            all_points.append(pts.reshape(-1, 3))
+                            if verbose and i < 3:  # 最初の3つだけ表示
+                                print(f"    Element {i} shape: {pts.shape}")
+                    
+                    if all_points:
+                        pts3d_combined = np.vstack(all_points)
                         if verbose:
-                            print(f"  Points before filtering: {len(pts3d_reshaped)}")
-                            print(f"  Points after filtering (conf >= {min_conf_thr}): {len(pts3d_filtered)}")
-                        
-                        # COLMAP形式に変換
-                        for i, pt in enumerate(pts3d_filtered):
-                            points3D.append({
-                                'xyz': pt,
-                                'rgb': np.array([128, 128, 128]),  # デフォルトグレー
-                                'error': 0.0,
-                                'image_ids': np.array([]),
-                                'point2D_idxs': np.array([])
-                            })
+                            print(f"  Combined pts3d shape: {pts3d_combined.shape}")
                     else:
-                        if verbose:
-                            print(f"  Warning: Unexpected conf dimensions")
-                else:
-                    # 信頼度がない場合は全ての点を使用
-                    pts3d_reshaped = pts3d.reshape(-1, 3)
+                        pts3d_combined = None
+                        
+                # Tensorまたはnumpy配列の場合
+                elif isinstance(pts3d, torch.Tensor):
+                    pts3d_combined = pts3d.detach().cpu().numpy()
                     if verbose:
-                        print(f"  No confidence values, using all {len(pts3d_reshaped)} points")
+                        print(f"  pts3d shape (from tensor): {pts3d_combined.shape}")
+                elif isinstance(pts3d, np.ndarray):
+                    pts3d_combined = pts3d
+                    if verbose:
+                        print(f"  pts3d shape (numpy): {pts3d_combined.shape}")
+                else:
+                    pts3d_combined = None
+                    if verbose:
+                        print(f"  Unexpected pts3d type: {type(pts3d)}")
+                
+                # 信頼度フィルタリング
+                if pts3d_combined is not None:
+                    # 信頼度を取得
+                    conf = None
+                    if hasattr(scene, 'get_conf'):
+                        conf = scene.get_conf()
+                    elif hasattr(scene, 'im_conf'):
+                        conf = scene.im_conf
                     
-                    for i, pt in enumerate(pts3d_reshaped):
+                    if conf is not None:
+                        if verbose:
+                            print(f"  conf type: {type(conf)}")
+                        
+                        # confもリストの可能性
+                        if isinstance(conf, list):
+                            all_conf = []
+                            for c in conf:
+                                if isinstance(c, torch.Tensor):
+                                    c = c.detach().cpu().numpy()
+                                if isinstance(c, np.ndarray):
+                                    all_conf.append(c.flatten())
+                            if all_conf:
+                                conf_combined = np.concatenate(all_conf)
+                            else:
+                                conf_combined = None
+                        elif isinstance(conf, torch.Tensor):
+                            conf_combined = conf.detach().cpu().numpy().flatten()
+                        elif isinstance(conf, np.ndarray):
+                            conf_combined = conf.flatten()
+                        else:
+                            conf_combined = None
+                        
+                        if conf_combined is not None:
+                            if verbose:
+                                print(f"  conf shape: {conf_combined.shape}")
+                            
+                            # 点群を平坦化
+                            pts3d_flat = pts3d_combined.reshape(-1, 3)
+                            
+                            # サイズを合わせる
+                            min_size = min(len(pts3d_flat), len(conf_combined))
+                            pts3d_flat = pts3d_flat[:min_size]
+                            conf_combined = conf_combined[:min_size]
+                            
+                            # フィルタリング
+                            mask = conf_combined >= min_conf_thr
+                            pts3d_filtered = pts3d_flat[mask]
+                            
+                            if verbose:
+                                print(f"  Points before filtering: {len(pts3d_flat)}")
+                                print(f"  Points after filtering (conf >= {min_conf_thr}): {len(pts3d_filtered)}")
+                        else:
+                            pts3d_filtered = pts3d_combined.reshape(-1, 3)
+                            if verbose:
+                                print(f"  No valid confidence, using all {len(pts3d_filtered)} points")
+                    else:
+                        # 信頼度がない場合は全ての点を使用
+                        pts3d_filtered = pts3d_combined.reshape(-1, 3)
+                        if verbose:
+                            print(f"  No confidence values, using all {len(pts3d_filtered)} points")
+                    
+                    # COLMAP形式に変換
+                    for i, pt in enumerate(pts3d_filtered):
+                        # 無効な点をスキップ（NaNやInf）
+                        if not np.all(np.isfinite(pt)):
+                            continue
+                        
                         points3D.append({
                             'xyz': pt,
-                            'rgb': np.array([128, 128, 128]),
+                            'rgb': np.array([128, 128, 128]),  # デフォルトグレー
                             'error': 0.0,
                             'image_ids': np.array([]),
                             'point2D_idxs': np.array([])
                         })
+                else:
+                    if verbose:
+                        print("  No valid pts3d data")
         else:
             if verbose:
                 print("  Warning: Scene has no get_pts3d method")
@@ -389,12 +452,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
             print(f"  Error extracting 3D points: {e}")
         import traceback
         traceback.print_exc()
-    
-    if verbose:
-        print(f"\n=== Summary ===")
-        print(f"Extracted {len(cameras)} cameras")
-        print(f"Extracted {len(images_data)} images")
-        print(f"Extracted {len(points3D)} 3D points")
+
     
     return cameras, images_data, points3D
 
@@ -595,3 +653,114 @@ def save_depth_map(depth: np.ndarray, path: Path):
 
 
 # Keep all your write_*_binary functions as they look correct
+
+def save_image_data(scene, images_dir, depth_dir, normal_dir, mask_dir, min_conf_thr, verbose):
+    """Save RGB images, depth maps, normal maps, and masks"""
+    if verbose:
+        print("\nSaving image data...")
+    
+    # ディレクトリが存在することを確認（既に作成済みのはず）
+    images_dir.mkdir(parents=True, exist_ok=True)
+    depth_dir.mkdir(parents=True, exist_ok=True)
+    normal_dir.mkdir(parents=True, exist_ok=True)
+    mask_dir.mkdir(parents=True, exist_ok=True)
+    
+    # ビュー数を取得
+    if hasattr(scene, 'imgs'):
+        num_views = len(scene.imgs)
+        imgs = scene.imgs
+    elif hasattr(scene, 'views'):
+        num_views = len(scene.views)
+        imgs = scene.views
+    else:
+        if verbose:
+            print("  Warning: Cannot access views")
+        return
+    
+    for idx in range(num_views):
+        try:
+            # RGB画像を保存
+            img_path = images_dir / f'image_{idx:04d}.jpg'
+            
+            # 画像データを取得
+            if hasattr(imgs[idx], 'img'):
+                img = imgs[idx].img
+            elif hasattr(imgs[idx], 'image'):
+                img = imgs[idx].image
+            else:
+                img = imgs[idx]
+            
+            # Tensorの場合はnumpy配列に変換
+            if isinstance(img, torch.Tensor):
+                img = img.detach().cpu().numpy()
+            
+            # 画像を正しい形式に変換
+            if isinstance(img, np.ndarray):
+                # (C, H, W) -> (H, W, C)に変換
+                if img.ndim == 3 and img.shape[0] in [1, 3, 4]:
+                    img = np.transpose(img, (1, 2, 0))
+                
+                # 値の範囲を[0, 255]に正規化
+                if img.max() <= 1.0:
+                    img = (img * 255).astype(np.uint8)
+                else:
+                    img = img.astype(np.uint8)
+                
+                # グレースケールの場合はRGBに変換
+                if img.ndim == 2:
+                    img = np.stack([img, img, img], axis=-1)
+                elif img.shape[-1] == 1:
+                    img = np.repeat(img, 3, axis=-1)
+                
+                # 画像を保存
+                from PIL import Image
+                Image.fromarray(img).save(img_path)
+                
+                if verbose and idx < 3:
+                    print(f"  Saved image {idx}: {img_path}")
+            
+            # デプスマップを保存（もし利用可能なら）
+            try:
+                if hasattr(scene, 'get_depthmaps'):
+                    depthmaps = scene.get_depthmaps()
+                    if depthmaps is not None and idx < len(depthmaps):
+                        depth = depthmaps[idx]
+                        if isinstance(depth, torch.Tensor):
+                            depth = depth.detach().cpu().numpy()
+                        
+                        if isinstance(depth, np.ndarray):
+                            depth_path = depth_dir / f'depth_{idx:04d}.npy'
+                            np.save(depth_path, depth)
+                            
+                            if verbose and idx < 3:
+                                print(f"  Saved depth {idx}: {depth_path}")
+            except Exception as e:
+                if verbose and idx == 0:
+                    print(f"  Note: Could not save depth maps: {e}")
+            
+            # マスクを保存（もし利用可能なら）
+            try:
+                if hasattr(scene, 'get_masks'):
+                    masks = scene.get_masks()
+                    if masks is not None and idx < len(masks):
+                        mask = masks[idx]
+                        if isinstance(mask, torch.Tensor):
+                            mask = mask.detach().cpu().numpy()
+                        
+                        if isinstance(mask, np.ndarray):
+                            mask_path = mask_dir / f'mask_{idx:04d}.png'
+                            mask_img = (mask * 255).astype(np.uint8)
+                            Image.fromarray(mask_img).save(mask_path)
+                            
+                            if verbose and idx < 3:
+                                print(f"  Saved mask {idx}: {mask_path}")
+            except Exception as e:
+                if verbose and idx == 0:
+                    print(f"  Note: Could not save masks: {e}")
+                    
+        except Exception as e:
+            if verbose:
+                print(f"  Error saving data for view {idx}: {e}")
+    
+    if verbose:
+        print(f"  Saved {num_views} images")
