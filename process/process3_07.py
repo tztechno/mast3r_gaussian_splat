@@ -7,6 +7,8 @@ import cv2
 from pathlib import Path
 import struct
 from scipy.spatial.transform import Rotation
+import torch
+from PIL import Image
 
 # ============================================================================
 # COLMAP Conversion (process3_05.py) - FIXED VERSION
@@ -68,7 +70,6 @@ def convert_mast3r_to_colmap(
     return str(output_path)
 
 
-
 def extract_scene_data(scene, min_conf_thr, verbose):
     """Extract cameras, images, and 3D points from MASt3R scene"""
     cameras = {}
@@ -80,7 +81,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
         print(f"Scene type: {type(scene)}")
         print(f"Scene attributes: {dir(scene)}")
     
-    # sceneの構造を確認
+    # Check scene structure
     if hasattr(scene, 'imgs'):
         num_views = len(scene.imgs)
     elif hasattr(scene, 'views'):
@@ -98,7 +99,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
         if verbose:
             print(f"\n=== Processing view {idx} ===")
         
-        # viewを取得
+        # Get view
         if hasattr(scene, 'imgs'):
             view = scene.imgs[idx]
         elif hasattr(scene, 'views'):
@@ -108,7 +109,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                 print(f"Warning: Cannot access view {idx}")
             continue
         
-        # 画像サイズを取得
+        # Get image size
         try:
             if hasattr(view, 'shape'):
                 if isinstance(view.shape, (list, tuple)) and len(view.shape) >= 2:
@@ -136,13 +137,13 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                 print(f"  Error getting image size: {e}, using default 512x512")
             height, width = 512, 512
         
-        # Camera intrinsics
+        # Camera intrinsics (Default values)
         fx = fy = 500.0
         cx = width / 2.0
         cy = height / 2.0
         
         try:
-            # カメラパラメータの取得を試みる
+            # Attempt to get camera parameters from the scene
             if hasattr(scene, 'get_intrinsics'):
                 K = scene.get_intrinsics()
                 if K is not None:
@@ -158,7 +159,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                             if verbose:
                                 print(f"  Extracted intrinsics from scene: fx={fx:.2f}, fy={fy:.2f}")
             
-            # 個別のviewからカメラパラメータを取得
+            # Attempt to get camera parameters from individual views
             if hasattr(view, 'camera') and view.camera is not None:
                 cam = view.camera
                 if isinstance(cam, torch.Tensor):
@@ -177,7 +178,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                 print(f"  Error extracting camera intrinsics: {e}")
                 print(f"  Using defaults: fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
         
-        # カメラIDとパラメータを保存
+        # Save Camera ID and parameters
         cam_id = idx
         cameras[cam_id] = {
             'model': 'PINHOLE',
@@ -186,14 +187,14 @@ def extract_scene_data(scene, min_conf_thr, verbose):
             'params': [fx, fy, cx, cy]
         }
         
-        # カメラポーズを抽出
-        qvec = np.array([1.0, 0.0, 0.0, 0.0])  # デフォルト（回転なし）
-        tvec = np.array([0.0, 0.0, 0.0])  # デフォルト（平行移動なし）
+        # Extract camera pose
+        qvec = np.array([1.0, 0.0, 0.0, 0.0])  # Default (no rotation)
+        tvec = np.array([0.0, 0.0, 0.0])       # Default (no translation)
         
         try:
             pose = None
             
-            # シーンレベルでポーズを取得
+            # Get pose at scene level
             if hasattr(scene, 'get_im_poses'):
                 poses = scene.get_im_poses()
                 if poses is not None:
@@ -206,40 +207,39 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                         if poses.ndim >= 2:
                             pose = poses[idx] if poses.ndim == 3 else poses
             
-            # ビューレベルでポーズを取得
+            # Get pose at view level
             if pose is None and hasattr(view, 'pose') and view.pose is not None:
                 pose = view.pose
             
-            # ポーズがTensorの場合はnumpy配列に変換
+            # Convert pose to numpy if it's a Tensor
             if pose is not None and isinstance(pose, torch.Tensor):
                 pose = pose.detach().cpu().numpy()
             
-            # ポーズの処理
+            # Process Pose
             if pose is not None:
                 if verbose:
                     print(f"  Pose type: {type(pose)}")
                     print(f"  Pose shape: {pose.shape if hasattr(pose, 'shape') else 'N/A'}")
                 
-                # ポーズの次元をチェック
+                # Check pose dimensions
                 if isinstance(pose, np.ndarray):
                     if pose.ndim == 1:
                         if verbose:
                             print(f"  Warning: 1D pose array (shape {pose.shape}), using identity pose")
-                        # デフォルト値を維持
                         
                     elif pose.ndim == 2:
                         if pose.shape == (4, 4):
-                            # 正しい4x4行列
+                            # Valid 4x4 matrix
                             if verbose:
                                 print(f"  Processing 4x4 pose matrix")
                             try:
-                                # 行列が特異でないかチェック
+                                # Check if matrix is singular
                                 det = np.linalg.det(pose)
                                 if abs(det) < 1e-10:
                                     if verbose:
                                         print(f"  Warning: Near-singular matrix (det={det}), using identity pose")
                                 else:
-                                    # MASt3Rのポーズはworld-to-camera、COLMAPはcamera-to-worldが必要
+                                    # MASt3R poses are world-to-camera; COLMAP needs camera-to-world
                                     pose_inv = np.linalg.inv(pose)
                                     qvec, tvec = matrix_to_quaternion_translation(pose_inv)
                                     if verbose:
@@ -249,7 +249,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                                     print(f"  LinAlgError: {e}, using identity pose")
                                     
                         elif pose.shape == (3, 4):
-                            # 3x4行列を4x4に拡張
+                            # Extend 3x4 matrix to 4x4
                             if verbose:
                                 print(f"  Processing 3x4 pose matrix")
                             pose_4x4 = np.eye(4)
@@ -269,7 +269,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                                     print(f"  LinAlgError: {e}, using identity pose")
                                     
                         elif pose.shape == (3, 3):
-                            # 3x3回転行列のみ
+                            # 3x3 rotation matrix only
                             if verbose:
                                 print(f"  Processing 3x3 rotation matrix")
                             pose_4x4 = np.eye(4)
@@ -302,47 +302,46 @@ def extract_scene_data(scene, min_conf_thr, verbose):
             import traceback
             traceback.print_exc()
         
-        # 画像データを保存
+        # Save image data
         img_id = idx + 1
         images_data[img_id] = {
             'qvec': qvec,
             'tvec': tvec,
             'camera_id': cam_id,
             'name': f'image_{idx:04d}.jpg',
-            'xys': np.array([]),  # 空の2D点配列
-            'point3D_ids': np.array([])  # 空の3D点ID配列
+            'xys': np.array([]),           # Empty 2D points array
+            'point3D_ids': np.array([])    # Empty 3D point IDs array
         }
         
         if verbose:
             print(f"  Final - Camera {cam_id}: {width}x{height}")
             print(f"  Final - Image {img_id}: qvec={qvec[:4]}, tvec={tvec[:3]}")
 
-
-    # 3D点を抽出（extract_scene_data関数内の該当部分を置き換え）
+    # Extract 3D points
     if verbose:
         print("\n=== Extracting 3D points ===")
     
     try:
-        # MASt3Rシーンから3D点を取得
+        # Get 3D points from MASt3R scene
         if hasattr(scene, 'get_pts3d'):
             pts3d = scene.get_pts3d()
             if pts3d is not None:
                 if verbose:
                     print(f"  pts3d type: {type(pts3d)}")
                 
-                # リストの場合の処理
+                # Handle list input
                 if isinstance(pts3d, list):
                     if verbose:
                         print(f"  pts3d is a list with {len(pts3d)} elements")
                     
-                    # リストの各要素を処理
+                    # Process each list element
                     all_points = []
                     for i, pts in enumerate(pts3d):
                         if isinstance(pts, torch.Tensor):
                             pts = pts.detach().cpu().numpy()
                         if isinstance(pts, np.ndarray):
                             all_points.append(pts.reshape(-1, 3))
-                            if verbose and i < 3:  # 最初の3つだけ表示
+                            if verbose and i < 3:  # Show first 3 elements
                                 print(f"    Element {i} shape: {pts.shape}")
                     
                     if all_points:
@@ -352,7 +351,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                     else:
                         pts3d_combined = None
                         
-                # Tensorまたはnumpy配列の場合
+                # Handle Tensor or Numpy array input
                 elif isinstance(pts3d, torch.Tensor):
                     pts3d_combined = pts3d.detach().cpu().numpy()
                     if verbose:
@@ -366,9 +365,9 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                     if verbose:
                         print(f"  Unexpected pts3d type: {type(pts3d)}")
                 
-                # 信頼度フィルタリング
+                # Confidence Filtering
                 if pts3d_combined is not None:
-                    # 信頼度を取得
+                    # Get confidence values
                     conf = None
                     if hasattr(scene, 'get_conf'):
                         conf = scene.get_conf()
@@ -379,7 +378,7 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                         if verbose:
                             print(f"  conf type: {type(conf)}")
                         
-                        # confもリストの可能性
+                        # conf might also be a list
                         if isinstance(conf, list):
                             all_conf = []
                             for c in conf:
@@ -402,15 +401,15 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                             if verbose:
                                 print(f"  conf shape: {conf_combined.shape}")
                             
-                            # 点群を平坦化
+                            # Flatten point cloud
                             pts3d_flat = pts3d_combined.reshape(-1, 3)
                             
-                            # サイズを合わせる
+                            # Align sizes
                             min_size = min(len(pts3d_flat), len(conf_combined))
                             pts3d_flat = pts3d_flat[:min_size]
                             conf_combined = conf_combined[:min_size]
                             
-                            # フィルタリング
+                            # Apply mask
                             mask = conf_combined >= min_conf_thr
                             pts3d_filtered = pts3d_flat[mask]
                             
@@ -422,20 +421,20 @@ def extract_scene_data(scene, min_conf_thr, verbose):
                             if verbose:
                                 print(f"  No valid confidence, using all {len(pts3d_filtered)} points")
                     else:
-                        # 信頼度がない場合は全ての点を使用
+                        # Use all points if confidence is unavailable
                         pts3d_filtered = pts3d_combined.reshape(-1, 3)
                         if verbose:
                             print(f"  No confidence values, using all {len(pts3d_filtered)} points")
                     
-                    # COLMAP形式に変換
+                    # Convert to COLMAP format
                     for i, pt in enumerate(pts3d_filtered):
-                        # 無効な点をスキップ（NaNやInf）
+                        # Skip invalid points (NaN or Inf)
                         if not np.all(np.isfinite(pt)):
                             continue
                         
                         points3D.append({
                             'xyz': pt,
-                            'rgb': np.array([128, 128, 128]),  # デフォルトグレー
+                            'rgb': np.array([128, 128, 128]),  # Default gray
                             'error': 0.0,
                             'image_ids': np.array([]),
                             'point2D_idxs': np.array([])
@@ -453,15 +452,11 @@ def extract_scene_data(scene, min_conf_thr, verbose):
         import traceback
         traceback.print_exc()
 
-    
     return cameras, images_data, points3D
 
 
-
 def estimate_camera_pose(pts3d: np.ndarray, confidence: np.ndarray, min_conf_thr: float) -> np.ndarray:
-    """
-    FIXED: Estimates camera pose from 3D points using PCA for orientation.
-    """
+    """Estimates camera pose from 3D points using PCA for orientation."""
     if hasattr(pts3d, 'cpu'):
         pts3d = pts3d.detach().cpu().numpy()
     if hasattr(confidence, 'cpu'):
@@ -481,7 +476,7 @@ def estimate_camera_pose(pts3d: np.ndarray, confidence: np.ndarray, min_conf_thr
     center = np.median(valid_pts, axis=0)
     centered_pts = valid_pts - center
 
-    # FIXED: Use PCA to estimate orientation
+    # Use PCA to estimate orientation
     try:
         cov = np.cov(centered_pts.T)
         eigenvalues, eigenvectors = np.linalg.eig(cov)
@@ -506,13 +501,11 @@ def estimate_camera_pose(pts3d: np.ndarray, confidence: np.ndarray, min_conf_thr
 
 
 def matrix_to_quaternion_translation(matrix: np.ndarray):
-    """
-    FIXED: Robust conversion of 4x4 transformation matrix to quaternion and translation.
-    """
+    """Robust conversion of 4x4 transformation matrix to quaternion and translation."""
     R = matrix[:3, :3]
     t = matrix[:3, 3]
 
-    # FIXED: Use scipy for robust quaternion conversion
+    # Use scipy for robust quaternion conversion
     rot = Rotation.from_matrix(R)
     quat = rot.as_quat()  # Returns [x, y, z, w]
     
@@ -523,9 +516,7 @@ def matrix_to_quaternion_translation(matrix: np.ndarray):
 
 
 def extract_3d_points_with_correspondences(scene, images_data, min_conf_thr: float, verbose: bool):
-    """
-    FIXED: Extracts 3D points with proper 2D-3D correspondences across images.
-    """
+    """Extracts 3D points with proper 2D-3D correspondences across images."""
     points3D = {}
     point_id = 1
 
@@ -574,7 +565,7 @@ def extract_3d_points_with_correspondences(scene, images_data, min_conf_thr: flo
 
         mask = conf_flat > min_conf_thr
 
-        # FIXED: Limit points but maintain spatial distribution
+        # Limit points but maintain spatial distribution
         if mask.sum() > 10000:
             indices = np.where(mask)[0]
             # Sample uniformly across image
@@ -587,7 +578,7 @@ def extract_3d_points_with_correspondences(scene, images_data, min_conf_thr: flo
         valid_colors = colors[mask]
         valid_indices = np.where(mask)[0]
 
-        # FIXED: Create 2D pixel coordinates
+        # Create 2D pixel coordinates
         y_coords, x_coords = np.unravel_index(valid_indices, (h, w))
         pixel_coords = np.stack([x_coords, y_coords], axis=1).astype(np.float64)
 
@@ -620,7 +611,7 @@ def extract_3d_points_with_correspondences(scene, images_data, min_conf_thr: flo
             image_xys.append(xy)
             image_point3D_ids.append(pid)
 
-        # FIXED: Update image with 2D-3D correspondences
+        # Update image with 2D-3D correspondences
         images_data[idx + 1]['xys'] = np.array(image_xys, dtype=np.float64)
         images_data[idx + 1]['point3D_ids'] = np.array(image_point3D_ids, dtype=np.uint64)
 
@@ -632,16 +623,11 @@ def extract_3d_points_with_correspondences(scene, images_data, min_conf_thr: flo
     return points3D
 
 
-# Keep the rest of your functions (save_image_data, compute_normals_from_depth, etc.) as they are
-# Just need to add this fix to save_depth_map:
-
 def save_depth_map(depth: np.ndarray, path: Path):
-    """
-    FIXED: Saves depth map in COLMAP binary format with proper handling.
-    """
+    """Saves depth map in COLMAP binary format with proper handling."""
     h, w = depth.shape
 
-    # FIXED: Handle invalid depth values
+    # Handle invalid depth values
     depth = np.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0)
     
     with open(path, 'wb') as f:
@@ -652,20 +638,18 @@ def save_depth_map(depth: np.ndarray, path: Path):
         f.write(depth_flat.tobytes())
 
 
-# Keep all your write_*_binary functions as they look correct
-
 def save_image_data(scene, images_dir, depth_dir, normal_dir, mask_dir, min_conf_thr, verbose):
     """Save RGB images, depth maps, normal maps, and masks"""
     if verbose:
         print("\nSaving image data...")
     
-    # ディレクトリが存在することを確認（既に作成済みのはず）
+    # Ensure directories exist (should be created already)
     images_dir.mkdir(parents=True, exist_ok=True)
     depth_dir.mkdir(parents=True, exist_ok=True)
     normal_dir.mkdir(parents=True, exist_ok=True)
     mask_dir.mkdir(parents=True, exist_ok=True)
     
-    # ビュー数を取得
+    # Get view count
     if hasattr(scene, 'imgs'):
         num_views = len(scene.imgs)
         imgs = scene.imgs
@@ -679,10 +663,10 @@ def save_image_data(scene, images_dir, depth_dir, normal_dir, mask_dir, min_conf
     
     for idx in range(num_views):
         try:
-            # RGB画像を保存
+            # Save RGB Image
             img_path = images_dir / f'image_{idx:04d}.jpg'
             
-            # 画像データを取得
+            # Extract image data
             if hasattr(imgs[idx], 'img'):
                 img = imgs[idx].img
             elif hasattr(imgs[idx], 'image'):
@@ -690,217 +674,30 @@ def save_image_data(scene, images_dir, depth_dir, normal_dir, mask_dir, min_conf
             else:
                 img = imgs[idx]
             
-            # Tensorの場合はnumpy配列に変換
+            # Convert Tensor to numpy
             if isinstance(img, torch.Tensor):
                 img = img.detach().cpu().numpy()
             
-            # 画像を正しい形式に変換
+            # Convert to correct format
             if isinstance(img, np.ndarray):
-                # (C, H, W) -> (H, W, C)に変換
+                # Convert (C, H, W) -> (H, W, C)
                 if img.ndim == 3 and img.shape[0] in [1, 3, 4]:
                     img = np.transpose(img, (1, 2, 0))
                 
-                # 値の範囲を[0, 255]に正規化
+                # Normalize values to [0, 255]
                 if img.max() <= 1.0:
                     img = (img * 255).astype(np.uint8)
                 else:
                     img = img.astype(np.uint8)
                 
-                # グレースケールの場合はRGBに変換
+                # Convert Grayscale to RGB
                 if img.ndim == 2:
                     img = np.stack([img, img, img], axis=-1)
                 elif img.shape[-1] == 1:
                     img = np.repeat(img, 3, axis=-1)
                 
-                # 画像を保存
-                from PIL import Image
+                # Save image
                 Image.fromarray(img).save(img_path)
                 
                 if verbose and idx < 3:
-                    print(f"  Saved image {idx}: {img_path}")
-            
-            # デプスマップを保存（もし利用可能なら）
-            try:
-                if hasattr(scene, 'get_depthmaps'):
-                    depthmaps = scene.get_depthmaps()
-                    if depthmaps is not None and idx < len(depthmaps):
-                        depth = depthmaps[idx]
-                        if isinstance(depth, torch.Tensor):
-                            depth = depth.detach().cpu().numpy()
-                        
-                        if isinstance(depth, np.ndarray):
-                            depth_path = depth_dir / f'depth_{idx:04d}.npy'
-                            np.save(depth_path, depth)
-                            
-                            if verbose and idx < 3:
-                                print(f"  Saved depth {idx}: {depth_path}")
-            except Exception as e:
-                if verbose and idx == 0:
-                    print(f"  Note: Could not save depth maps: {e}")
-            
-            # マスクを保存（もし利用可能なら）
-            try:
-                if hasattr(scene, 'get_masks'):
-                    masks = scene.get_masks()
-                    if masks is not None and idx < len(masks):
-                        mask = masks[idx]
-                        if isinstance(mask, torch.Tensor):
-                            mask = mask.detach().cpu().numpy()
-                        
-                        if isinstance(mask, np.ndarray):
-                            mask_path = mask_dir / f'mask_{idx:04d}.png'
-                            mask_img = (mask * 255).astype(np.uint8)
-                            Image.fromarray(mask_img).save(mask_path)
-                            
-                            if verbose and idx < 3:
-                                print(f"  Saved mask {idx}: {mask_path}")
-            except Exception as e:
-                if verbose and idx == 0:
-                    print(f"  Note: Could not save masks: {e}")
-                    
-        except Exception as e:
-            if verbose:
-                print(f"  Error saving data for view {idx}: {e}")
-    
-    if verbose:
-        print(f"  Saved {num_views} images")
-
-
-def write_cameras_binary(cameras, path_to_model_file):
-    """
-    Write COLMAP cameras.bin file
-    
-    Args:
-        cameras: dict of camera data
-        path_to_model_file: path to cameras.bin
-    """
-    with open(path_to_model_file, "wb") as fid:
-        write_next_bytes(fid, len(cameras), "Q")
-        for camera_id, cam in cameras.items():
-            model_id = 1  # PINHOLE
-            write_next_bytes(fid, camera_id, "I")
-            write_next_bytes(fid, model_id, "I")
-            write_next_bytes(fid, cam['width'], "Q")
-            write_next_bytes(fid, cam['height'], "Q")
-            for p in cam['params']:
-                write_next_bytes(fid, float(p), "d")
-
-
-def write_images_binary(images, path_to_model_file):
-    """
-    Write COLMAP images.bin file
-    
-    Args:
-        images: dict of image data
-        path_to_model_file: path to images.bin
-    """
-    with open(path_to_model_file, "wb") as fid:
-        write_next_bytes(fid, len(images), "Q")
-        for image_id, img in images.items():
-            write_next_bytes(fid, image_id, "I")
-            write_next_bytes(fid, img['qvec'], "dddd")
-            write_next_bytes(fid, img['tvec'], "ddd")
-            write_next_bytes(fid, img['camera_id'], "I")
-            
-            # Write image name
-            for char in img['name']:
-                write_next_bytes(fid, char.encode("utf-8"), "c")
-            write_next_bytes(fid, b"\x00", "c")
-            
-            # Write 2D points
-            write_next_bytes(fid, len(img['xys']), "Q")
-            for xy, point3D_id in zip(img['xys'], img['point3D_ids']):
-                write_next_bytes(fid, xy, "dd")
-                write_next_bytes(fid, point3D_id, "Q")
-
-
-def write_points3d_binary(points3D, path_to_model_file):
-    """
-    Write COLMAP points3D.bin file
-    
-    Args:
-        points3D: list of 3D point data
-        path_to_model_file: path to points3D.bin
-    """
-    with open(path_to_model_file, "wb") as fid:
-        write_next_bytes(fid, len(points3D), "Q")
-        for point_id, point in enumerate(points3D):
-            write_next_bytes(fid, point_id, "Q")
-            write_next_bytes(fid, point['xyz'], "ddd")
-            write_next_bytes(fid, point['rgb'], "BBB")
-            write_next_bytes(fid, point['error'], "d")
-            
-            track_length = len(point['image_ids'])
-            write_next_bytes(fid, track_length, "Q")
-            for image_id, point2D_idx in zip(point['image_ids'], point['point2D_idxs']):
-                write_next_bytes(fid, image_id, "I")
-                write_next_bytes(fid, point2D_idx, "I")
-
-
-def write_next_bytes(fid, data, format_char_sequence):
-    """
-    Helper function to write bytes to file
-    
-    Args:
-        fid: file object
-        data: data to write (can be scalar, tuple, list, or numpy array)
-        format_char_sequence: struct format string
-    """
-    if isinstance(data, (list, tuple, np.ndarray)):
-        bytes_data = struct.pack("<" + format_char_sequence, *data)
-    else:
-        bytes_data = struct.pack("<" + format_char_sequence, data)
-    fid.write(bytes_data)
-
-
-def matrix_to_quaternion_translation(matrix):
-    """
-    Convert 4x4 transformation matrix to quaternion and translation
-    
-    Args:
-        matrix: 4x4 numpy array
-        
-    Returns:
-        qvec: quaternion [w, x, y, z]
-        tvec: translation [x, y, z]
-    """
-    # 回転行列部分を抽出
-    R = matrix[:3, :3]
-    
-    # 平行移動ベクトルを抽出
-    tvec = matrix[:3, 3]
-    
-    # 回転行列をクォータニオンに変換
-    # Shepperdのアルゴリズム
-    trace = np.trace(R)
-    
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (R[2, 1] - R[1, 2]) * s
-        y = (R[0, 2] - R[2, 0]) * s
-        z = (R[1, 0] - R[0, 1]) * s
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-        w = (R[2, 1] - R[1, 2]) / s
-        x = 0.25 * s
-        y = (R[0, 1] + R[1, 0]) / s
-        z = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-        w = (R[0, 2] - R[2, 0]) / s
-        x = (R[0, 1] + R[1, 0]) / s
-        y = 0.25 * s
-        z = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-        w = (R[1, 0] - R[0, 1]) / s
-        x = (R[0, 2] + R[2, 0]) / s
-        y = (R[1, 2] + R[2, 1]) / s
-        z = 0.25 * s
-    
-    # クォータニオンを正規化
-    qvec = np.array([w, x, y, z])
-    qvec = qvec / np.linalg.norm(qvec)
-    
-    return qvec, tvec
+                    print(f"  Saved image {idx}:
