@@ -1,14 +1,11 @@
+#process2_02.py
+
 import os
 import struct
 import numpy as np
 import torch
 from PIL import Image
 from pathlib import Path
-
-# =====================================================================
-# INTEGRATED COLMAP EXPORTER (MASt3R PROCESS 2 - WITH COLORS)
-# Updated: 2026/01/26
-# =====================================================================
 
 def rotmat_to_qvec(R):
     """Convert rotation matrix to COLMAP-style quaternion (w, x, y, z)."""
