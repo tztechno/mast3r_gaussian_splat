@@ -764,3 +764,143 @@ def save_image_data(scene, images_dir, depth_dir, normal_dir, mask_dir, min_conf
     
     if verbose:
         print(f"  Saved {num_views} images")
+
+
+def write_cameras_binary(cameras, path_to_model_file):
+    """
+    Write COLMAP cameras.bin file
+    
+    Args:
+        cameras: dict of camera data
+        path_to_model_file: path to cameras.bin
+    """
+    with open(path_to_model_file, "wb") as fid:
+        write_next_bytes(fid, len(cameras), "Q")
+        for camera_id, cam in cameras.items():
+            model_id = 1  # PINHOLE
+            write_next_bytes(fid, camera_id, "I")
+            write_next_bytes(fid, model_id, "I")
+            write_next_bytes(fid, cam['width'], "Q")
+            write_next_bytes(fid, cam['height'], "Q")
+            for p in cam['params']:
+                write_next_bytes(fid, float(p), "d")
+
+
+def write_images_binary(images, path_to_model_file):
+    """
+    Write COLMAP images.bin file
+    
+    Args:
+        images: dict of image data
+        path_to_model_file: path to images.bin
+    """
+    with open(path_to_model_file, "wb") as fid:
+        write_next_bytes(fid, len(images), "Q")
+        for image_id, img in images.items():
+            write_next_bytes(fid, image_id, "I")
+            write_next_bytes(fid, img['qvec'], "dddd")
+            write_next_bytes(fid, img['tvec'], "ddd")
+            write_next_bytes(fid, img['camera_id'], "I")
+            
+            # Write image name
+            for char in img['name']:
+                write_next_bytes(fid, char.encode("utf-8"), "c")
+            write_next_bytes(fid, b"\x00", "c")
+            
+            # Write 2D points
+            write_next_bytes(fid, len(img['xys']), "Q")
+            for xy, point3D_id in zip(img['xys'], img['point3D_ids']):
+                write_next_bytes(fid, xy, "dd")
+                write_next_bytes(fid, point3D_id, "Q")
+
+
+def write_points3d_binary(points3D, path_to_model_file):
+    """
+    Write COLMAP points3D.bin file
+    
+    Args:
+        points3D: list of 3D point data
+        path_to_model_file: path to points3D.bin
+    """
+    with open(path_to_model_file, "wb") as fid:
+        write_next_bytes(fid, len(points3D), "Q")
+        for point_id, point in enumerate(points3D):
+            write_next_bytes(fid, point_id, "Q")
+            write_next_bytes(fid, point['xyz'], "ddd")
+            write_next_bytes(fid, point['rgb'], "BBB")
+            write_next_bytes(fid, point['error'], "d")
+            
+            track_length = len(point['image_ids'])
+            write_next_bytes(fid, track_length, "Q")
+            for image_id, point2D_idx in zip(point['image_ids'], point['point2D_idxs']):
+                write_next_bytes(fid, image_id, "I")
+                write_next_bytes(fid, point2D_idx, "I")
+
+
+def write_next_bytes(fid, data, format_char_sequence):
+    """
+    Helper function to write bytes to file
+    
+    Args:
+        fid: file object
+        data: data to write (can be scalar, tuple, list, or numpy array)
+        format_char_sequence: struct format string
+    """
+    if isinstance(data, (list, tuple, np.ndarray)):
+        bytes_data = struct.pack("<" + format_char_sequence, *data)
+    else:
+        bytes_data = struct.pack("<" + format_char_sequence, data)
+    fid.write(bytes_data)
+
+
+def matrix_to_quaternion_translation(matrix):
+    """
+    Convert 4x4 transformation matrix to quaternion and translation
+    
+    Args:
+        matrix: 4x4 numpy array
+        
+    Returns:
+        qvec: quaternion [w, x, y, z]
+        tvec: translation [x, y, z]
+    """
+    # 回転行列部分を抽出
+    R = matrix[:3, :3]
+    
+    # 平行移動ベクトルを抽出
+    tvec = matrix[:3, 3]
+    
+    # 回転行列をクォータニオンに変換
+    # Shepperdのアルゴリズム
+    trace = np.trace(R)
+    
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (R[2, 1] - R[1, 2]) * s
+        y = (R[0, 2] - R[2, 0]) * s
+        z = (R[1, 0] - R[0, 1]) * s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+    
+    # クォータニオンを正規化
+    qvec = np.array([w, x, y, z])
+    qvec = qvec / np.linalg.norm(qvec)
+    
+    return qvec, tvec
