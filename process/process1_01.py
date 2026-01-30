@@ -1,5 +1,5 @@
+#process1_01.py
 
-#v26
 def extract_colmap_data(scene, image_paths, max_points=1000000):
     """
     Extract COLMAP-compatible camera parameters and 3D points from MASt3R scene
