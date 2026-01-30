@@ -700,4 +700,97 @@ def save_image_data(scene, images_dir, depth_dir, normal_dir, mask_dir, min_conf
                 Image.fromarray(img).save(img_path)
                 
                 if verbose and idx < 3:
-                    print(f"  Saved image {idx}:
+                    print(f"  Saved image {idx}: {img_path}")
+            
+            # Save Depth Map (if available)
+            try:
+                if hasattr(scene, 'get_depthmaps'):
+                    depthmaps = scene.get_depthmaps()
+                    if depthmaps is not None and idx < len(depthmaps):
+                        depth = depthmaps[idx]
+                        if isinstance(depth, torch.Tensor):
+                            depth = depth.detach().cpu().numpy()
+                        
+                        if isinstance(depth, np.ndarray):
+                            depth_path = depth_dir / f'depth_{idx:04d}.npy'
+                            np.save(depth_path, depth)
+                            
+                            if verbose and idx < 3:
+                                print(f"  Saved depth {idx}: {depth_path}")
+            except Exception as e:
+                if verbose and idx == 0:
+                    print(f"  Note: Could not save depth maps: {e}")
+            
+            # Save Mask (if available)
+            try:
+                if hasattr(scene, 'get_masks'):
+                    masks = scene.get_masks()
+                    if masks is not None and idx < len(masks):
+                        mask = masks[idx]
+                        if isinstance(mask, torch.Tensor):
+                            mask = mask.detach().cpu().numpy()
+                        
+                        if isinstance(mask, np.ndarray):
+                            mask_path = mask_dir / f'mask_{idx:04d}.png'
+                            mask_img = (mask * 255).astype(np.uint8)
+                            Image.fromarray(mask_img).save(mask_path)
+                            
+                            if verbose and idx < 3:
+                                print(f"  Saved mask {idx}: {mask_path}")
+            except Exception as e:
+                if verbose and idx == 0:
+                    print(f"  Note: Could not save masks: {e}")
+                    
+        except Exception as e:
+            if verbose:
+                print(f"  Error saving data for view {idx}: {e}")
+    
+    if verbose:
+        print(f"  Saved {num_views} images")
+
+# Helpers for binary writing (assumed based on context)
+def write_next_bytes(fid, data, format_str):
+    if isinstance(data, (list, tuple, np.ndarray)):
+        fid.write(struct.pack(format_str, *data))
+    else:
+        fid.write(struct.pack(format_str, data))
+
+def write_cameras_binary(cameras, path_to_model_file):
+    """Write COLMAP cameras.bin file"""
+    with open(path_to_model_file, "wb") as fid:
+        write_next_bytes(fid, len(cameras), "Q")
+        for camera_id, cam in cameras.items():
+            model_id = 1  # PINHOLE
+            write_next_bytes(fid, camera_id, "I")
+            write_next_bytes(fid, model_id, "I")
+            write_next_bytes(fid, cam['width'], "Q")
+            write_next_bytes(fid, cam['height'], "Q")
+            for p in cam['params']:
+                write_next_bytes(fid, float(p), "d")
+
+
+def write_images_binary(images, path_to_model_file):
+    """Write COLMAP images.bin file"""
+    with open(path_to_model_file, "wb") as fid:
+        write_next_bytes(fid, len(images), "Q")
+        for image_id, img in images.items():
+            write_next_bytes(fid, image_id, "I")
+            write_next_bytes(fid, img['qvec'], "dddd")
+            write_next_bytes(fid, img['tvec'], "ddd")
+            write_next_bytes(fid, img['camera_id'], "I")
+            
+            # Write image name
+            for char in img['name']:
+                write_next_bytes(fid, char.encode("utf-8"), "c")
+            write_next_bytes(fid, b"\x00", "c")
+            
+            # Write 2D points
+            write_next_bytes(fid, len(img['xys']), "Q")
+            for xy, point3D_id in zip(img['xys'], img['point3D_ids']):
+                write_next_bytes(fid, xy, "dd")
+                write_next_bytes(fid, point3D_id, "Q")
+
+def write_points3d_binary(points3D, path_to_model_file):
+    """Write COLMAP points3D.bin file"""
+    # Assuming points3D is a list or dict of point data...
+    pass
