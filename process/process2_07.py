@@ -1,4 +1,4 @@
-# process2_06_optimized.py
+# process2_07.py
 # 最適化版: 重複・無駄を削除し、3つのbin出力に特化
 
 import struct
