@@ -1,6 +1,6 @@
 
 
-def generate_pointcloud_from_colmap(colmap_sparse_dir, output_ply_path, colorize_by_height=True):
+def generate_pointcloud_from_colmap(colmap_sparse_dir, output_ply_path, colorize_by_height=False):
     """
     汎用的なCOLMAP → PLY変換関数
     
