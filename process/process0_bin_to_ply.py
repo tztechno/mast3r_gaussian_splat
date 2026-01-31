@@ -1,3 +1,5 @@
+
+
 def generate_pointcloud_from_colmap_bins_robust(colmap_sparse_dir, output_ply_path, colorize_by_height=False):
     """
     完全修正版: COLMAP to PLY conversion function
