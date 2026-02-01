@@ -1,4 +1,4 @@
-# mast3r_gaussiansplat
+# mast3r_gaussian_splat
 
 ---
 
