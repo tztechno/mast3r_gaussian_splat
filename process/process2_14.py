@@ -340,11 +340,17 @@ def rotation_matrix_to_quaternion(R):
 
 
 
+
+import os
+import struct
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+
 def export_colmap_binary_simple(cameras_dict, pts3d, confidence, colors, image_paths, output_dir):
-    """COLMAP sparse形式をバイナリファイルで出力(シンプル版)"""
+    """Exports sparse COLMAP data to binary files (Simple version)"""
     os.makedirs(output_dir, exist_ok=True)
     
-    # 最初の画像からカメラパラメータを取得
+    # Get camera parameters from the first image
     first_key = list(cameras_dict.keys())[0]
     first_cam = cameras_dict[first_key]
     
@@ -356,12 +362,12 @@ def export_colmap_binary_simple(cameras_dict, pts3d, confidence, colors, image_p
     
     print("\n=== Exporting to COLMAP Binary Format (Simple) ===")
     
-    # 1. cameras.bin - 1つのカメラのみ
+    # 1. cameras.bin - Only one camera defined
     cameras_file = os.path.join(output_dir, 'cameras.bin')
     with open(cameras_file, 'wb') as f:
-        f.write(struct.pack('Q', 1))  # カメラ数: 1
-        f.write(struct.pack('I', 1))  # カメラID: 1
-        f.write(struct.pack('i', 1))  # モデルID: 1 (SIMPLE_PINHOLE)
+        f.write(struct.pack('Q', 1))  # Number of cameras: 1
+        f.write(struct.pack('I', 1))  # Camera ID: 1
+        f.write(struct.pack('i', 1))  # Model ID: 1 (SIMPLE_PINHOLE)
         f.write(struct.pack('Q', w))
         f.write(struct.pack('Q', h))
         f.write(struct.pack('d', focal))
@@ -381,11 +387,12 @@ def export_colmap_binary_simple(cameras_dict, pts3d, confidence, colors, image_p
             pose = cam_info['pose']
             
             # Rotation matrix to quaternion
-            R = pose[:3, :3]
-            quat = rotation_matrix_to_quaternion(R)
+            rotation_mat = pose[:3, :3]
+            # Assumes a helper function 'rotation_matrix_to_quaternion' exists
+            quat = rotation_matrix_to_quaternion(rotation_mat)
             
             # Translation
-            t = pose[:3, 3]
+            tvec = pose[:3, 3]
             
             image_id = i + 1
             f.write(struct.pack('I', image_id))
@@ -395,16 +402,16 @@ def export_colmap_binary_simple(cameras_dict, pts3d, confidence, colors, image_p
                 f.write(struct.pack('d', q))
             
             # Translation
-            for ti in t:
-                f.write(struct.pack('d', ti))
+            for val in tvec:
+                f.write(struct.pack('d', val))
             
-            # カメラID - すべて1を使う
+            # Camera ID - Use 1 for all images
             f.write(struct.pack('I', 1))
             
-            # Image name
+            # Image name (requires a helper or logic to write null-terminated string)
             write_string(f, img_name)
             
-            # Number of 2D points
+            # Number of 2D points (0 for sparse placeholder)
             f.write(struct.pack('Q', 0))
     
     print(f"✓ images.bin: {len(image_paths)} images")
@@ -417,30 +424,27 @@ def export_colmap_binary_simple(cameras_dict, pts3d, confidence, colors, image_p
         for point_id, (pt, conf, color) in enumerate(zip(pts3d, confidence, colors), 1):
             f.write(struct.pack('Q', point_id))
             
-            # XYZ
+            # XYZ coordinates
             for coord in pt:
                 f.write(struct.pack('d', coord))
             
-            # RGB
+            # RGB color
             for c in color:
                 f.write(struct.pack('B', int(c)))
             
-            # Error
+            # Error (reprojection error estimate)
             error = 1.0 / max(conf, 0.01)
             f.write(struct.pack('d', error))
             
-            # Track
+            # Track (visibility list length 0)
             f.write(struct.pack('Q', 0))
     
     print(f"✓ points3D.bin: {len(pts3d)} points")
     print(f"\n✅ Export complete: {output_dir}")
 
 
-import struct
-from scipy.spatial.transform import Rotation as R
-
 def write_colmap_sparse(cameras_dict, pts3d, confidence, image_paths, output_dir):
-    """COLMAP sparse形式をバイナリファイルで出力(元のコード)"""
+    """Exports sparse COLMAP data to binary files (Original logic)"""
     os.makedirs(output_dir, exist_ok=True)
     
     if not cameras_dict:
@@ -458,15 +462,15 @@ def write_colmap_sparse(cameras_dict, pts3d, confidence, image_paths, output_dir
     # cameras.bin
     cameras_file = os.path.join(output_dir, 'cameras.bin')
     with open(cameras_file, 'wb') as f:
-        f.write(struct.pack('Q', 1))
+        f.write(struct.pack('Q', 1))  # Num cameras
         camera_id = 1
         model_id = 1  # PINHOLE
         f.write(struct.pack('i', camera_id))
         f.write(struct.pack('i', model_id))
         f.write(struct.pack('Q', w))
         f.write(struct.pack('Q', h))
-        f.write(struct.pack('d', focal))
-        f.write(struct.pack('d', focal))
+        f.write(struct.pack('d', focal)) # fx
+        f.write(struct.pack('d', focal)) # fy
         f.write(struct.pack('d', cx))
         f.write(struct.pack('d', cy))
     
@@ -486,6 +490,7 @@ def write_colmap_sparse(cameras_dict, pts3d, confidence, image_paths, output_dir
             else:
                 pose = cam_info['pose']
             
+            # Convert Camera-to-World (c2w) to World-to-Camera (w2c)
             try:
                 w2c = np.linalg.inv(pose)
             except np.linalg.LinAlgError:
@@ -493,7 +498,10 @@ def write_colmap_sparse(cameras_dict, pts3d, confidence, image_paths, output_dir
             
             rot_mat = w2c[:3, :3]
             tvec = w2c[:3, 3]
+            
+            # Scipy returns quaternions as (x, y, z, w)
             quat = R.from_matrix(rot_mat).as_quat()
+            # COLMAP expects (qw, qx, qy, qz)
             qw, qx, qy, qz = quat[3], quat[0], quat[1], quat[2]
             
             image_id = i + 1
@@ -505,10 +513,12 @@ def write_colmap_sparse(cameras_dict, pts3d, confidence, image_paths, output_dir
             f.write(struct.pack('d', tvec[0]))
             f.write(struct.pack('d', tvec[1]))
             f.write(struct.pack('d', tvec[2]))
-            f.write(struct.pack('i', 1))
+            f.write(struct.pack('i', 1))  # Camera ID
+            
+            # Null-terminated string for image name
             img_name_bytes = img_name.encode('utf-8') + b'\x00'
             f.write(img_name_bytes)
-            f.write(struct.pack('Q', 0))
+            f.write(struct.pack('Q', 0))  # No 2D points
     
     print(f"✓ Written images.bin ({len(image_paths)} images)")
     
@@ -522,11 +532,11 @@ def write_colmap_sparse(cameras_dict, pts3d, confidence, image_paths, output_dir
             f.write(struct.pack('d', point[0]))
             f.write(struct.pack('d', point[1]))
             f.write(struct.pack('d', point[2]))
-            f.write(struct.pack('B', 255))
-            f.write(struct.pack('B', 255))
-            f.write(struct.pack('B', 255))
-            f.write(struct.pack('d', 0.0))
-            f.write(struct.pack('Q', 0))
+            f.write(struct.pack('B', 255)) # R
+            f.write(struct.pack('B', 255)) # G
+            f.write(struct.pack('B', 255)) # B
+            f.write(struct.pack('d', 0.0)) # Error
+            f.write(struct.pack('Q', 0))   # Track
     
     print(f"✓ Written points3D.bin ({len(pts3d)} points)")
     print(f"\n✓ COLMAP sparse reconstruction saved")
