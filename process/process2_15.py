@@ -142,7 +142,9 @@ def create_colmap_bins(scene, image_paths, output_dir, conf_threshold=1.5):
     save_colmap_binary(pts3d, colors, conf, cameras_dict, output_dir)
 
     # 3. PLY Output (Optional verification)
-    write_colored_ply(pts3d, colors, Path(output_dir) / "reconstruction.ply")
+    write_colored_ply(pts3d, colors, Path(output_dir) / "point_cloud.ply")
 
     print("\n✓ PROCESS COMPLETE")
     return cameras_dict, pts3d, conf, colors
+
+
