@@ -284,7 +284,8 @@ def extract_scene_data(scene, views, output_dir):
     
     # Extract 3D points with colors
     print("\nExtracting 3D points with colors...")
-    pts3d = scene.get_pts3d(clip_thred=None)
+    #pts3d = scene.get_pts3d(clip_thred=None)
+    pts3d = scene.get_pts3d()
     pts3d_np = pts3d.cpu().numpy()
     
     # Get confidence masks
