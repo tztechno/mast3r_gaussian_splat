@@ -507,7 +507,8 @@ def extract_scene_data(scene, min_conf_thr, verbose):
 
 
 def convert_mast3r_to_colmap(scene, output_dir, min_conf_thr=1.5, clean_depth=True, 
-                            mask_images=True, verbose=True, processed_image_paths=None):
+                            mask_images=True, verbose=True, processed_image_paths=None,
+                            max_points=100000):
     """
     Convert MASt3R scene to COLMAP format
     
@@ -520,6 +521,7 @@ def convert_mast3r_to_colmap(scene, output_dir, min_conf_thr=1.5, clean_depth=Tr
         verbose: Print verbose output
         processed_image_paths: List of paths to processed (square) images
     """
+                                
     output_dir = Path(output_dir)
     sparse_dir = output_dir / "sparse" / "0"
     images_dir = output_dir / "images"
