@@ -542,13 +542,20 @@ def convert_mast3r_to_colmap(scene, output_dir, min_conf_thr=1.5, clean_depth=Tr
     
     cameras, images_data, points3D = extract_scene_data(scene, min_conf_thr, verbose)
 
+    #----------------------------down sampling
     if max_points is not None and len(points3D) > max_points:
-        if verbose:
-            print(f"\nDownsampling 3D points from {len(points3D)} to {max_points}...")
-
-        all_ids = list(points3D.keys())
-        sampled_ids = np.random.choice(all_ids, max_points, replace=False)
-        points3D = {idx: points3D[idx] for idx in sampled_ids}
+        print(f"\nDownsampling 3D points from {len(points3D)} to {max_points}...")
+        
+        if isinstance(points3D, dict):
+            all_ids = list(points3D.keys())
+            sampled_ids = np.random.choice(all_ids, max_points, replace=False)
+            points3D = {idx: points3D[idx] for idx in sampled_ids}
+        elif isinstance(points3D, list):
+            sampled_indices = np.random.choice(len(points3D), max_points, replace=False)
+            points3D = [points3D[i] for i in sampled_indices]
+        else:
+            raise TypeError(f"points3D must be dict or list, got {type(points3D)}")
+    #----------------------------down sampling   
     
     save_image_data(scene, images_dir, depth_dir, normal_dir, mask_dir, 
                     min_conf_thr, verbose, processed_image_paths=processed_image_paths)
