@@ -476,6 +476,10 @@ def convert_mast3r_to_colmap(scene, output_dir, min_conf_thr=1.5, clean_depth=Tr
         verbose: Print verbose output
         processed_image_paths: List of paths to processed (square) images
     """
+    import numpy as np
+    import shutil
+    from PIL import Image as PILImage
+    
     output_dir = Path(output_dir)
     sparse_dir = output_dir / "sparse" / "0"
     images_dir = output_dir / "images"
@@ -492,15 +496,190 @@ def convert_mast3r_to_colmap(scene, output_dir, min_conf_thr=1.5, clean_depth=Tr
     
     if verbose:
         print("\n" + "="*70)
+        print("Step 4: COLMAP Conversion")
+        print("="*70)
+        print("\n" + "="*70)
         print("Converting MASt3R scene to COLMAP format")
         print("="*70)
         print(f"Output directory: {output_dir}")
     
-    cameras, images_data, points3D = extract_scene_data(scene, min_conf_thr, verbose)
+    # Get views from scene
+    views = scene.imgs
+    num_views = len(views)
     
-    save_image_data(scene, images_dir, depth_dir, normal_dir, mask_dir, 
-                    min_conf_thr, verbose, processed_image_paths=processed_image_paths)
+    if verbose:
+        print(f"\nExtracting scene data...")
+        print(f"Number of views: {num_views}")
     
+    # Initialize COLMAP data structures
+    cameras = {}
+    images_data = {}
+    points3D = {}
+    
+    # Extract 3D points with colors
+    if verbose:
+        print("\nExtracting 3D points with colors...")
+    
+    pts3d = scene.get_pts3d(clip_thred=None)
+    pts3d_np = pts3d.cpu().numpy()
+    
+    # Get confidence masks
+    conf_list = scene.get_masks()
+    
+    # Extract colors from images
+    colors_list = []
+    valid_pts_list = []
+    
+    for idx, view in enumerate(views):
+        img = view['img'].cpu().numpy()
+        conf = conf_list[idx].cpu().numpy()
+        pts = pts3d_np[idx]
+        
+        # Filter by confidence
+        valid_mask = conf > min_conf_thr / 100.0
+        valid_pts = pts[valid_mask]
+        
+        # Get colors (assuming img is in [H, W, 3] format with values 0-1)
+        if img.max() <= 1.0:
+            img_uint8 = (img * 255).astype(np.uint8)
+        else:
+            img_uint8 = img.astype(np.uint8)
+        
+        colors = img_uint8[valid_mask]
+        
+        valid_pts_list.append(valid_pts)
+        colors_list.append(colors)
+    
+    # Combine all points and colors
+    all_pts3d = np.concatenate(valid_pts_list, axis=0)
+    all_colors = np.concatenate(colors_list, axis=0)
+    
+    # Remove invalid points
+    valid_3d = np.isfinite(all_pts3d).all(axis=1)
+    all_pts3d = all_pts3d[valid_3d]
+    all_colors = all_colors[valid_3d]
+    
+    if verbose:
+        print(f"  Extracted {len(all_pts3d)} 3D points with colors")
+        print(f"  Sample colors: {all_colors[:3].tolist()}")
+    
+    # Create points3D data
+    for point_id, (xyz, rgb) in enumerate(zip(all_pts3d, all_colors), start=1):
+        points3D[point_id] = Point3D(
+            id=point_id,
+            xyz=xyz.astype(np.float64),
+            rgb=rgb.astype(np.uint8),
+            error=0.0,
+            image_ids=np.array([], dtype=np.int32),
+            point2D_idxs=np.array([], dtype=np.int32)
+        )
+    
+    # Get actual image filenames from processed_images directory
+    if verbose:
+        print("\nSaving image data...")
+    
+    processed_images_dir = output_dir.parent / 'processed_images'
+    
+    if not processed_images_dir.exists():
+        raise FileNotFoundError(f"Processed images directory not found: {processed_images_dir}")
+    
+    actual_image_files = sorted([f.name for f in processed_images_dir.iterdir() 
+                                 if f.suffix.lower() in ['.jpg', '.jpeg', '.png']])
+    
+    if len(actual_image_files) != num_views:
+        raise ValueError(f"Number of images mismatch: {len(actual_image_files)} files vs {num_views} views")
+    
+    if verbose:
+        print(f"  Using {len(actual_image_files)} processed images")
+    
+    # Process each view with actual filenames
+    for idx, (view, actual_filename) in enumerate(zip(views, actual_image_files)):
+        image_id = idx + 1
+        
+        # Correction: Use actual filename (e.g., "image_004_bottom.jpeg")
+        image_name = actual_filename  
+        
+        # Get camera parameters
+        focals = view['camera_intrinsics'][0, [0, 1, 1]].cpu().numpy()
+        principal_point = view['camera_intrinsics'][0, [0, 1], [2, 2]].cpu().numpy()
+        camera_id = idx + 1
+        
+        # Get image dimensions
+        img_shape = view['img'].shape
+        height, width = img_shape[0], img_shape[1]
+        
+        # Camera model: PINHOLE
+        params = np.array([
+            focals[0],           # fx
+            focals[1],           # fy
+            principal_point[0],  # cx
+            principal_point[1]   # cy
+        ], dtype=np.float64)
+        
+        # Store camera data
+        cameras[camera_id] = Camera(
+            id=camera_id,
+            model='PINHOLE',
+            width=width,
+            height=height,
+            params=params
+        )
+        
+        # Get pose (camera-to-world transformation)
+        cam_to_world = view['camera_pose'].cpu().numpy()[0]
+        
+        # Convert to world-to-camera (COLMAP convention)
+        world_to_cam = np.linalg.inv(cam_to_world)
+        
+        # Extract rotation and translation
+        R = world_to_cam[:3, :3]
+        t = world_to_cam[:3, 3]
+        
+        # Convert rotation matrix to quaternion (w, x, y, z)
+        qvec = rotmat2qvec(R)
+        tvec = t.astype(np.float64)
+        
+        # Store image data
+        images_data[image_id] = Image(
+            id=image_id,
+            qvec=qvec,
+            tvec=tvec,
+            camera_id=camera_id,
+            name=image_name,  # Using actual filename
+            xys=np.zeros((0, 2)),
+            point3D_ids=np.full(0, -1, dtype=np.int64)
+        )
+        
+        # Copy image file with actual filename
+        src_path = processed_images_dir / actual_filename
+        dst_path = images_dir / actual_filename
+        if src_path.exists():
+            shutil.copy2(src_path, dst_path)
+            if verbose:
+                print(f"  Copied image {idx}: {actual_filename}")
+        else:
+            if verbose:
+                print(f"  ⚠️  Warning: Image not found: {src_path}")
+        
+        # Save depth map
+        depth = view['pts3d'][..., 2].cpu().numpy()  # Z-coordinate as depth
+        depth_path = depth_dir / f'depth_{idx:04d}.npy'
+        np.save(depth_path, depth)
+        if verbose:
+            print(f"  Saved depth {idx}: {depth_path}")
+        
+        # Save confidence mask
+        conf = conf_list[idx].cpu().numpy()
+        mask_path = mask_dir / f'mask_{idx:04d}.png'
+        mask_img = (conf * 255).astype(np.uint8)
+        PILImage.fromarray(mask_img).save(mask_path)
+        if verbose:
+            print(f"  Saved mask {idx}: {mask_path}")
+    
+    if verbose:
+        print(f"  Completed saving {num_views} images")
+    
+    # Write COLMAP binary files
     if verbose:
         print("\nWriting COLMAP binary files...")
     
