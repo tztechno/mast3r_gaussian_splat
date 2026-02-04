@@ -1,3 +1,4 @@
+# can set max_points
 
 import struct
 import numpy as np
