@@ -1,4 +1,4 @@
-# can set max_points
+# can set max_points w/gemini
 
 import struct
 import numpy as np
